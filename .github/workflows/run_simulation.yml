@@ -5,6 +5,13 @@ name: Monthly Parameter Sweep (All 2000 Combos)
 on:
   workflow_dispatch:
     inputs:
+      symbols:
+        description: >
+          Symbols to test — comma-separated (e.g. TCS,WIPRO,INFY).
+          Leave blank to use watch_symbols from config (or ALL if config is also blank).
+        required: false
+        default: ''
+        type: string
       run_consolidate_csv:
         description: 'Step 1 – Consolidate bhav CSVs to DB (skip if db/ already built)'
         required: false
@@ -82,12 +89,12 @@ jobs:
       # ── Step 4: Filter Signals (full mode — all filter param combos) ─────────
       - name: Step 4 – Filter Signals (all param combos)
         if: ${{ github.event.inputs.run_signals == 'true' }}
-        run: python src/04_filter_signals.py --mode full
+        run: python src/04_filter_signals.py --mode full --symbols "${{ github.event.inputs.symbols }}"
 
       # ── Step 5: Run Simulation (full mode — all 2000 trade combos) ───────────
       - name: Step 5 – Run Full Parameter Sweep
         if: ${{ github.event.inputs.run_simulation == 'true' }}
-        run: python src/05_run_simulation.py --mode full
+        run: python src/05_run_simulation.py --mode full --symbols "${{ github.event.inputs.symbols }}"
 
       # ── Step 6: Consolidate Results ──────────────────────────────────────────
       - name: Step 6 – Consolidate Result Files
