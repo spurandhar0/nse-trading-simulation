@@ -1212,6 +1212,13 @@ def main():
                           buy_history=buy_history_data)
 
         print(f"\n✅ Picks sheet saved : {out_path}")
+
+        # ── Also save as fixed-path latest_quickrun.xlsx for dashboard ────────
+        import shutil
+        latest_path = "output/latest_quickrun.xlsx"
+        shutil.copy2(out_path, latest_path)
+        print(f"✅ Latest copy saved : {latest_path}")
+
         print(f"✅ Total signals     : {len(all_rows):,}")
         print(f"   Executed          : {counts.get('Executed',0)}  "
               f"(Open={counts.get('Open',0)}  Closed={counts.get('Closed',0)})")
