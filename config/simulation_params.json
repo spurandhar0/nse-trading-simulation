@@ -1,38 +1,48 @@
 {
-  "_comment": "NSE Trading Simulation Parameters — edit values here, no code changes needed",
+  "_readme": "NSE Trading Simulation — Parameter Configuration",
+  "_readme2": "Two sections: quick_run (daily, single param set) and param_sweep (monthly, all combos)",
 
   "signal_start_date": "2025-01-01",
   "signal_end_date":   "2025-12-31",
 
-  "filter": {
-    "_comment_filter": "Filter combos: all combinations of these arrays are tested. pct_min < pct_max and ath_min < ath_max (both negative). Invalid combos auto-skipped.",
-    "days_back": [5],
-    "pct_min":   [-0.10],
-    "pct_max":   [-0.05],
-    "ath_min":   [-0.60],
-    "ath_max":   [-0.30]
+  "investment_per_buy":        10000,
+  "pending_window_days":       30,
+  "force_exit_calendar_days":  90,
+  "max_rows_per_sheet":        25000,
+
+  "_section_quick_run": "========== QUICK RUN (daily) ==========",
+  "_quick_run_comment": "Single fixed parameter set. Change these values to update your default daily run.",
+  "quick_run": {
+    "days_back":      5,
+    "pct_min":       -0.10,
+    "pct_max":       -0.05,
+    "ath_min":       -0.60,
+    "ath_max":       -0.30,
+    "max_buys":       2,
+    "buy_drop":       0.05,
+    "target":         0.20,
+    "stoploss":       0.10,
+    "max_duration":   30
   },
 
-  "trade": {
-    "_comment_trade": "Trade combos: all combinations = MaxBuys(4) x BuyDrop(4) x Target(5) x Stoploss(5) x MaxDuration(5) = 2000 rows",
-    "max_buys":    [1, 2, 3, 4],
-    "buy_drop":    [0.05, 0.10, 0.15, 0.20],
-    "target":      [0.10, 0.15, 0.20, 0.25, 0.30],
-    "stoploss":    [0.05, 0.10, 0.15, 0.20, 0.25],
-    "max_duration":[20, 30, 40, 50, 60]
-  },
-
-  "investment_per_buy":       10000,
-  "pending_window_days":      30,
-  "force_exit_calendar_days": 90,
-  "max_rows_per_sheet":       25000,
-
-  "_comment_full_test": "For full parameter sweep (all ranges from VBA modConfig), change filter to:",
-  "_full_test_filter_example": {
-    "days_back": [5, 10, 15, 20],
-    "pct_min":   [-0.15, -0.12, -0.09, -0.06, -0.03],
-    "pct_max":   [-0.10, -0.07, -0.04, -0.01],
-    "ath_min":   [-0.70, -0.60, -0.50, -0.40, -0.30, -0.20],
-    "ath_max":   [-0.60, -0.50, -0.40, -0.30, -0.20, -0.10]
+  "_section_param_sweep": "========== MONTHLY PARAMETER SWEEP ==========",
+  "_param_sweep_comment": "Arrays of values. Every combination is tested → 2000 rows output. MaxBuys(4) × BuyDrop(4) × Target(5) × Stoploss(5) × MaxDuration(5) = 2000 trade combos.",
+  "param_sweep": {
+    "filter": {
+      "_comment": "Filter ranges. All combinations of days_back × pct pairs × ath pairs tested. Invalid combos (min>=max) auto-skipped.",
+      "days_back":  [5],
+      "pct_min":    [-0.10, -0.09, -0.08, -0.07, -0.06],
+      "pct_max":    [-0.05, -0.04, -0.03],
+      "ath_min":    [-0.60, -0.55, -0.50, -0.45, -0.40],
+      "ath_max":    [-0.40, -0.35, -0.30]
+    },
+    "trade": {
+      "_comment": "Trade param ranges. All combos tested per filter combo.",
+      "max_buys":      [1, 2, 3, 4],
+      "buy_drop":      [0.05, 0.10, 0.15, 0.20],
+      "target":        [0.10, 0.15, 0.20, 0.25, 0.30],
+      "stoploss":      [0.05, 0.10, 0.15, 0.20, 0.25],
+      "max_duration":  [20, 30, 40, 50, 60]
+    }
   }
 }
