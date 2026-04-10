@@ -1,33 +1,32 @@
-name: Quick Run (Daily Default Parameters)
+name: Quick Run (Daily Picks Sheet)
 
 # ─── When to run ──────────────────────────────────────────────────────────────
-# Manual button: Actions → Quick Run → Run workflow
-# Scheduled:     Mon–Fri 1:15 PM UTC = 6:45 PM IST  (after bhav fetch at 6:15 PM)
+# 1. Scheduled: Mon–Fri 6:45 PM IST (13:15 UTC) — always rebuilds DB
+# 2. Manual:    workflow_dispatch — user picks symbols + rebuild toggle
 on:
+  schedule:
+    - cron: "15 13 * * 1-5"   # 6:45 PM IST (UTC+5:30)
   workflow_dispatch:
     inputs:
       symbols:
         description: >
-          Symbols to test — comma-separated (e.g. TCS,WIPRO,INFY).
+          Symbols to run — comma-separated (e.g. TCS,WIPRO,INFY).
           Leave blank to use watch_symbols from config (or ALL if config is also blank).
         required: false
         default: ''
         type: string
       rebuild_db:
-        description: 'Rebuild DB from CSVs? YES on first run or when new CSVs added. NO to reuse existing db/ (faster).'
+        description: 'Rebuild DB from bhav CSVs (true = fresh build; false = use cached DB)'
         required: false
         default: 'true'
         type: choice
         options: ['true', 'false']
 
-  schedule:
-    - cron: '45 13 * * 1-5'   # Mon–Fri 6:45 PM IST
-
 permissions:
   contents: write
 
 jobs:
-  quick_run:
+  quick-run:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -39,6 +38,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── Cache db/ parquet files between runs ────────────────────────────────
+      # Cache key: hash of all bhav CSV files — invalidates when new CSVs added
+      # This lets rebuild_db=false work on manual re-runs without re-processing
+      - name: Restore db/ cache
+        id: db-cache
+        uses: actions/cache@v4
+        with:
+          path: db/
+          key: db-${{ runner.os }}-${{ hashFiles('bhav_data/**') }}
+          restore-keys: |
+            db-${{ runner.os }}-
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -47,34 +58,51 @@ jobs:
       - name: Install dependencies
         run: pip install pandas numpy pyarrow openpyxl
 
-      # ── Step 1: Consolidate CSVs (skip if db already built) ─────────────────
-      - name: Step 1 – Consolidate CSVs
-        if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
+      # ── Step 1: Consolidate CSVs ─────────────────────────────────────────────
+      # Runs when:  (a) schedule  (b) user sets rebuild_db=true
+      #             (c) cache miss (db not available for this bhav_data state)
+      - name: Step 1 – Consolidate bhav CSVs to DB
+        if: >-
+          ${{
+            github.event_name == 'schedule' ||
+            github.event.inputs.rebuild_db == 'true' ||
+            steps.db-cache.outputs.cache-hit != 'true'
+          }}
         run: python src/01_consolidate_csv.py
 
       # ── Step 2: Filter EQ ────────────────────────────────────────────────────
       - name: Step 2 – Filter EQ Series
-        if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
+        if: >-
+          ${{
+            github.event_name == 'schedule' ||
+            github.event.inputs.rebuild_db == 'true' ||
+            steps.db-cache.outputs.cache-hit != 'true'
+          }}
         run: python src/02_filter_eq.py
 
       # ── Step 3: ATH ──────────────────────────────────────────────────────────
-      - name: Step 3 – Compute ATH
-        if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
+      - name: Step 3 – Compute ATH per symbol
+        if: >-
+          ${{
+            github.event_name == 'schedule' ||
+            github.event.inputs.rebuild_db == 'true' ||
+            steps.db-cache.outputs.cache-hit != 'true'
+          }}
         run: python src/03_find_ath.py
 
-      # ── Step 4: Filter Signals (quick mode) ──────────────────────────────────
-      - name: Step 4 – Filter Signals (quick params)
+      # ── Step 4: Filter Signals (quick mode — fixed filter params) ────────────
+      - name: Step 4 – Filter Signals
         run: python src/04_filter_signals.py --mode quick --symbols "${{ github.event.inputs.symbols }}"
 
-      # ── Step 5: Run Simulation (quick mode) ──────────────────────────────────
-      - name: Step 5 – Run Simulation (quick params)
+      # ── Step 5: Run Quick Simulation → Picks Sheet ───────────────────────────
+      - name: Step 5 – Run Quick Picks Simulation
         run: python src/05_run_simulation.py --mode quick --symbols "${{ github.event.inputs.symbols }}"
 
-      # ── Commit outputs ───────────────────────────────────────────────────────
-      - name: Commit QuickRun output to repo
+      # ── Commit output to repo ─────────────────────────────────────────────────
+      - name: Commit output to repo
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add db/ output/
-          git diff --cached --quiet || git commit -m "quick-run: $(date +'%d-%b-%Y %H:%M IST')"
+          git add output/
+          git diff --cached --quiet || git commit -m "quick-run: $(date +'%d-%b-%Y %H:%M')"
           git push
