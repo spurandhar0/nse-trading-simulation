@@ -44,7 +44,7 @@ OUTPUT_DIR         = "output"
 COLUMNS_43 = [
     "Test", "DAYSBACK", "PCTMIN", "PCTMAX", "ATHMIN", "ATHMAX",
     "MAXBUYS", "BUYDROP", "TARGET", "STOPLOSS", "MAXDURA",
-    "WinRate", "TotalTrade", "Executed", "Open/Closed",
+    "WinRate", "TotalTrade", "Executed", "Open", "Closed",
     "ProfitTGT", "LossSL", "LossFEMD", "LossFECD", "ProfitFEMD", "ProfitFECD",
     "Pending", "Expired", "Invalid", "TotalRows", "Wins", "Losses", "TotalStock",
     "SumProfit", "SumGainFin",
@@ -298,13 +298,15 @@ def aggregate_stats(results):
                 elif mdays <= 35: dur35 += 1
                 elif mdays <= 40: dur40 += 1
 
-    total_trades = exec_count
     total_stocks = len(results)
     win_rate     = round((wins / closed_count * 100) if closed_count > 0 else 0, 2)
 
     return {
-        "WinRate":    win_rate,    "TotalTrade": total_trades,
-        "Executed":   exec_count,  "Open/Closed": f"{open_count}/{closed_count}",
+        "WinRate":    win_rate,
+        "TotalTrade": exec_count + pending + expired,   # VBA: execCount+pendingCount+expiredCount
+        "Executed":   exec_count,
+        "Open":       open_count,
+        "Closed":     closed_count,
         "ProfitTGT":  c_profit_tgt,"LossSL":     c_loss_sl,
         "LossFEMD":   c_loss_femd, "LossFECD":   c_loss_fecd,
         "ProfitFEMD": c_profit_femd,"ProfitFECD": c_profit_fecd,
@@ -433,10 +435,12 @@ def main():
     if len(sig_df) == 0:
         print("⚠️  No signals found. Saving diagnostic Excel instead of results.")
         # ── Always create output file so the run is visible in output/ ─────────
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        ts_str_d  = datetime.now().strftime("%Y%m%d_%H%M%S")
-        prefix_d  = "QuickRun" if mode == "quick" else "Results"
-        diag_path = os.path.join(OUTPUT_DIR, f"{prefix_d}_NoSignals_{ts_str_d}.xlsx")
+        ts_now_d    = datetime.now()
+        ts_str_d    = ts_now_d.strftime("%Y%m%d_%H%M%S")
+        prefix_d    = "QuickRun" if mode == "quick" else "Results"
+        month_dir_d = os.path.join(OUTPUT_DIR, ts_now_d.strftime("%Y-%m"))
+        os.makedirs(month_dir_d, exist_ok=True)
+        diag_path   = os.path.join(month_dir_d, f"{prefix_d}_NoSignals_{ts_str_d}.xlsx")
         wb_d = Workbook()
         ws_d = wb_d.active
         ws_d.title = "No_Signals"
@@ -490,10 +494,12 @@ def main():
     print(f"Filter combos in signals : {len(filter_groups)}")
     print(f"Total output rows        : {total_expected:,}")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    ts_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix   = "QuickRun" if mode == "quick" else "Results"
-    out_path = os.path.join(OUTPUT_DIR, f"{prefix}_{ts_str}.xlsx")
+    ts_now    = datetime.now()
+    ts_str    = ts_now.strftime("%Y%m%d_%H%M%S")
+    prefix    = "QuickRun" if mode == "quick" else "Results"
+    month_dir = os.path.join(OUTPUT_DIR, ts_now.strftime("%Y-%m"))
+    os.makedirs(month_dir, exist_ok=True)
+    out_path  = os.path.join(month_dir, f"{prefix}_{ts_str}.xlsx")
 
     wb           = Workbook()
     ws           = wb.active
