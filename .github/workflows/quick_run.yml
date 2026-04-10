@@ -14,9 +14,9 @@ on:
         default: ''
         type: string
       rebuild_db:
-        description: 'Rebuild DB from CSVs? (false = skip Steps 1-3, reuse existing db/)'
+        description: 'Rebuild DB from CSVs? YES on first run or when new CSVs added. NO to reuse existing db/ (faster).'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options: ['true', 'false']
 
