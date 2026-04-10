@@ -2,8 +2,8 @@
   "_readme": "NSE Trading Simulation — Parameter Configuration",
   "_readme2": "Two sections: quick_run (daily, single param set) and param_sweep (monthly, all combos)",
 
-  "signal_start_date": "2025-01-01",
-  "signal_end_date":   "2025-12-31",
+  "signal_start_date": "2026-01-01",
+  "signal_end_date":   "2026-12-31",
   "investment_per_buy":        10000,
   "pending_window_days":          30,
   "force_exit_calendar_days":     90,
@@ -11,36 +11,30 @@
 
   "_section_quick_run": "========== QUICK RUN (daily) ==========",
   "_quick_run_comment": "Single fixed parameter set. Change these values to update your default daily run.",
-  "_watch_symbols_comment": "Specific symbols to run. Empty list [] = ALL symbols. Example: ['TCS','WIPRO','INFY']",
+  "_watch_symbols_comment": "Specific symbols to run. Empty list [] = ALL symbols. Example: [\"TCS\",\"WIPRO\",\"INFY\"]",
   "quick_run": {
     "watch_symbols": [
-"JUNIORBEES","NIFTYBEES","AXISNIFTY","HDFCNIFTY","IDFNIFTYET","LICNETFN50",
-"LIQUIDBEES","LIQUIDETF","NIFTYETF","NEXT50","MID150BEES","MOM50","MON100",
-"NETF","NIF100BEES","QNIFTY","SBIETFQLTY","SETF10GILT","SETFNN50","UTINIFTETF",
-"UTISENSETF","SDL26BEES","SETFNIF50","ABSLLIQUID","HDFCSML250","LIQUID",
-"LIQUIDSBI","MONQ50","MOQUALITY","MOVALUE","NIFMID150","UTISXN50","LIQUIDCASE",
-"NIFTYBETF","GSEC10IETF","LIQUIDADD","ABGSEC","GROWWLIQID","LIQUIDBETF",
-"LIQUIDSHRI","LIQUIDPLUS","AONELIQUID","CASHIETF","HNGSNGBEES",
-
-# Stocks (partial shown, continue same pattern)
-"ALKEM","ASIANPAINT","AXISBANK","BHARTIARTL","BOSCHLTD","BRITANNIA","CIPLA",
-"COLPAL","DABUR","DRREDDY","EICHERMOT","GRASIM","HAVELLS","HDFCBANK",
-"HDFCLIFE","HINDUNILVR","ICICIBANK","ICICIGI","INFY","ITC","KOTAKBANK",
-"MARICO","MARUTI","NESTLEIND","PAGEIND","PIDILITIND","RELIANCE","SBILIFE",
-"SBIN","SHREECEM","SUNPHARMA","TATACONSUM","TCS","TITAN","TORNTPHARM",
-"ULTRACEMCO",
-
-# ETFs / GOLD / SILVER
-"GOLDBEES","AUTOBEES","AXISBNKETF","AXISCETF","AXISGOLD","AXISTECETF",
-"BANKBEES","BSLGOLDETF","CONSUMBEES","ICICIB22","INFRABEES","MAKEINDIA",
-"NV20BEES","QGOLDHALF","SBIETFCON","SBIETFIT","SBIETFPB","SETFGOLD",
-"SHARIABEES","CPSEETF","GOLDSHARE","HDFCGOLD","SETFNIFBK","BANKETF",
-"GOLDETF","HDFCPSUBK","GROWWGOLD","UNIONGOLD","GOLD360","LICMFGOLD",
-
-# Silver
-"SBISILVER","ESILVER","GROWWSLVR","SILVERETF","SILVERBEES","SILVER",
-"AXISILVER","HDFCSILVER"
-],
+      "JUNIORBEES","NIFTYBEES","AXISNIFTY","HDFCNIFTY","IDFNIFTYET","LICNETFN50",
+      "LIQUIDBEES","LIQUIDETF","NIFTYETF","NEXT50","MID150BEES","MOM50","MON100",
+      "NETF","NIF100BEES","QNIFTY","SBIETFQLTY","SETF10GILT","SETFNN50","UTINIFTETF",
+      "UTISENSETF","SDL26BEES","SETFNIF50","ABSLLIQUID","HDFCSML250","LIQUID",
+      "LIQUIDSBI","MONQ50","MOQUALITY","MOVALUE","NIFMID150","UTISXN50","LIQUIDCASE",
+      "NIFTYBETF","GSEC10IETF","LIQUIDADD","ABGSEC","GROWWLIQID","LIQUIDBETF",
+      "LIQUIDSHRI","LIQUIDPLUS","AONELIQUID","CASHIETF","HNGSNGBEES",
+      "ALKEM","ASIANPAINT","AXISBANK","BHARTIARTL","BOSCHLTD","BRITANNIA","CIPLA",
+      "COLPAL","DABUR","DRREDDY","EICHERMOT","GRASIM","HAVELLS","HDFCBANK",
+      "HDFCLIFE","HINDUNILVR","ICICIBANK","ICICIGI","INFY","ITC","KOTAKBANK",
+      "MARICO","MARUTI","NESTLEIND","PAGEIND","PIDILITIND","RELIANCE","SBILIFE",
+      "SBIN","SHREECEM","SUNPHARMA","TATACONSUM","TCS","TITAN","TORNTPHARM",
+      "ULTRACEMCO",
+      "GOLDBEES","AUTOBEES","AXISBNKETF","AXISCETF","AXISGOLD","AXISTECETF",
+      "BANKBEES","BSLGOLDETF","CONSUMBEES","ICICIB22","INFRABEES","MAKEINDIA",
+      "NV20BEES","QGOLDHALF","SBIETFCON","SBIETFIT","SBIETFPB","SETFGOLD",
+      "SHARIABEES","CPSEETF","GOLDSHARE","HDFCGOLD","SETFNIFBK","BANKETF",
+      "GOLDETF","HDFCPSUBK","GROWWGOLD","UNIONGOLD","GOLD360","LICMFGOLD",
+      "SBISILVER","ESILVER","GROWWSLVR","SILVERETF","SILVERBEES","SILVER",
+      "AXISILVER","HDFCSILVER"
+    ],
     "days_back":    5,
     "pct_min":     -0.1,
     "pct_max":     -0.05,
@@ -54,7 +48,7 @@
   },
 
   "_section_param_sweep": "========== MONTHLY PARAMETER SWEEP ==========",
-  "_param_sweep_comment": "Arrays of values. Every combination is tested. MaxBuys(4) × BuyDrop(4) × Target(5) × Stoploss(5) × MaxDuration(5) = 2000 trade combos.",
+  "_param_sweep_comment": "Arrays of values. Every combination is tested.",
   "param_sweep": {
     "_watch_symbols_comment": "Specific symbols to run for monthly sweep. Empty list [] = ALL symbols.",
     "watch_symbols": [],
