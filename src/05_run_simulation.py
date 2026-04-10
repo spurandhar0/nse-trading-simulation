@@ -12,6 +12,8 @@ Modes:
         Output: per-trade PICKS SHEET — one row per trade.
         Sheet name: Pickse
         File  : output/YYYY-MM/QuickRun_Picks_YYYYMMDD_HHMMSS.xlsx
+        Extra sheets: MarketData (latest day OHLCV all symbols)
+                      BuyHistory (OHLCV for bought stocks, signal→exit date)
 
   --mode full
         All parameter combinations from param_sweep -> aggregate stats.
@@ -22,7 +24,9 @@ SIMULATION RULES:
   - Entry  : D+1 low <= signal_close  -> buy at signal_close price (B0)
   - Additional buys: when buy_count <= max_buys AND next-buy-level >= stop_price
   - Same-day buy and sell NOT allowed (exit checks skip the buy day itself)
-  - Invalid: signal date is the last available date for that symbol (no D+1 data)
+  - Invalid (case 1): signal date is the last available date for that symbol (no D+1 data)
+  - Invalid (case 2): >10 consecutive calendar days between signal date and next
+                      available trading date for that symbol (stock suspended/delisted)
   - Pending: buy not triggered yet, within pending_window_days of signal
   - Expired: buy not triggered, beyond pending_window_days
   - FE-MD  : market_days >= max_duration (trading days counted after first buy)
@@ -88,6 +92,10 @@ FMT_PRICE = "0.00"
 FMT_PCT   = "0.00%"
 FMT_INT   = "General"
 
+# OHLCV sheet columns (Market Data + Buy History sheets)
+OHLCV_COLS = ["SYMBOL", "DATE1", "PREV_CLOSE", "OPEN_PRICE",
+              "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE"]
+
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
@@ -135,6 +143,64 @@ def build_price_dict(eq_df):
     return price_dict
 
 
+# ─── MARKET DATA HELPERS (for HTML dashboard extra sheets) ───────────────────
+
+def build_latest_market_data(eq_df):
+    """
+    Extract the latest available OHLCV row per symbol.
+    Used for the Market Data tab in the HTML dashboard.
+    Returns list of [SYMBOL, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE]
+    """
+    print("Extracting latest market data for dashboard...")
+    latest_idx = eq_df.groupby("SYMBOL")["DATE1"].idxmax()
+    latest_df  = eq_df.loc[latest_idx].sort_values("SYMBOL").reset_index(drop=True)
+    rows = []
+    for _, row in latest_df.iterrows():
+        rows.append([
+            str(row["SYMBOL"]),
+            row["DATE1"].to_pydatetime().replace(tzinfo=None),
+            round(float(row["PREV_CLOSE"]),   2),
+            round(float(row["OPEN_PRICE"]),   2),
+            round(float(row["HIGH_PRICE"]),   2),
+            round(float(row["LOW_PRICE"]),    2),
+            round(float(row["CLOSE_PRICE"]),  2),
+        ])
+    print(f"  Latest market data: {len(rows):,} symbols")
+    return rows
+
+
+def build_buy_history(eq_df, bought_ranges):
+    """
+    Extract OHLCV for bought stocks from (signal_date - 7 days) to exit/last date.
+    bought_ranges: list of (symbol_str, start_pd_Timestamp, end_pd_Timestamp)
+    Returns list of [SYMBOL, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE]
+    Used for the Stock History tab in the HTML dashboard.
+    """
+    if not bought_ranges:
+        return []
+    print(f"Extracting buy history for {len(bought_ranges):,} bought stocks...")
+    rows = []
+    for sym, start_ts, end_ts in bought_ranges:
+        mask = (
+            (eq_df["SYMBOL"] == sym) &
+            (eq_df["DATE1"]  >= start_ts) &
+            (eq_df["DATE1"]  <= end_ts)
+        )
+        sub = eq_df[mask].sort_values("DATE1")
+        for _, row in sub.iterrows():
+            rows.append([
+                str(row["SYMBOL"]),
+                row["DATE1"].to_pydatetime().replace(tzinfo=None),
+                round(float(row["PREV_CLOSE"]),  2),
+                round(float(row["OPEN_PRICE"]),  2),
+                round(float(row["HIGH_PRICE"]),  2),
+                round(float(row["LOW_PRICE"]),   2),
+                round(float(row["CLOSE_PRICE"]), 2),
+            ])
+    print(f"  Buy history rows: {len(rows):,}")
+    return rows
+
+
 # ─── DURATION GROUP ───────────────────────────────────────────────────────────
 
 def duration_group(market_days):
@@ -158,6 +224,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     Key rules:
       - If start_idx >= last_idx  (signal date is the last available date for
         this symbol) -> INVALID (no D+1 data to attempt entry).
+      - If gap between signal date and next available date > 10 calendar days
+        -> INVALID (stock suspended / delisted / data missing 10+ days).
       - Loop: range(start_idx+1, last_idx)  -- excludes the very last data day
         ("today") from both buy attempts and exit checks.
       - Same-day buy and sell NOT allowed: exit checks skip the buy day itself.
@@ -199,9 +267,17 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     start_idx = day_map[sig_ts]
     last_idx  = len(dates) - 1
 
-    # ── INVALID: signal on last available date for this symbol — no D+1 ──────
+    # ── INVALID case 1: signal on last available date — no D+1 data ──────────
     if start_idx >= last_idx:
         return invalid
+
+    # ── INVALID case 2: >10 consecutive calendar days gap to next data ────────
+    # Indicates stock suspension, delisting, or extended data gap
+    next_avail = pd.Timestamp(dates[start_idx + 1])
+    if (next_avail - sig_ts).days > 10:
+        inv = dict(invalid)
+        inv["result_str"] = "Invalid: No consecutive market data for 10+ days"
+        return inv
 
     # Prices for target and stop (based on signal_close per VBA logic)
     stop_price   = round(signal_close * (1 - stoploss_pct), 2)
@@ -423,8 +499,13 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     start_idx = day_map[sig_ts]
     last_idx  = len(dates) - 1
 
-    # ── INVALID: signal on last available date for this symbol ────────────────
+    # ── INVALID case 1: signal on last available date ─────────────────────────
     if start_idx >= last_idx:
+        return {"order": "Invalid"}
+
+    # ── INVALID case 2: >10 consecutive calendar days gap to next data ────────
+    next_avail = pd.Timestamp(dates[start_idx + 1])
+    if (next_avail - sig_ts).days > 10:
         return {"order": "Invalid"}
 
     stop_price   = round(signal_close * (1 - stoploss_pct), 2)
@@ -688,7 +769,6 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     sold_date  = _to_dt(sim["exit_date"]) if sim["exit_found"] else None
 
     # BuyClPrice — the signal-day close price
-    # For Invalid rows this is still the signal close (same as expected output)
     buy_cl_price = round(float(sig["SIGNAL_CLOSE"]), 2)
 
     # Unrealized P&L for Open trades (computed using recent_ltp)
@@ -755,13 +835,42 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     return row
 
 
-def write_picks_excel(rows, columns, out_path):
+def _style_ohlcv_header(ws):
+    """Apply navy header formatting to an OHLCV sheet."""
+    thin = Side(style="thin", color="BFBFBF")
+    bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for ci, col_name in enumerate(OHLCV_COLS, 1):
+        cell           = ws.cell(row=1, column=ci)
+        cell.font      = Font(bold=True, size=10, color=WHITE)
+        cell.fill      = PatternFill("solid", fgColor=NAVY)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border    = bdr
+        # Date column
+        if col_name == "DATE1":
+            for r in range(2, ws.max_row + 1):
+                ws.cell(row=r, column=ci).number_format = FMT_DATE
+        # Price columns
+        elif col_name not in ("SYMBOL",):
+            for r in range(2, ws.max_row + 1):
+                ws.cell(row=r, column=ci).number_format = FMT_PRICE
+    ws.column_dimensions["A"].width = 16  # SYMBOL
+    ws.column_dimensions["B"].width = 14  # DATE1
+    for col_letter in ["C", "D", "E", "F", "G"]:
+        ws.column_dimensions[col_letter].width = 12
+    ws.freeze_panes = ws["A2"]
+
+
+def write_picks_excel(rows, columns, out_path,
+                      market_data=None, buy_history=None):
     """
     Write picks sheet to Excel.
       Sheet name : Pickse
       Row 1      : Bold header — navy background, white text
       Row 2+     : Data with alternating row fill
       Formats    : prices = 0.00 | percentages = 0.00% | dates = DD-MM-YYYY
+      Extra sheets (if provided):
+        MarketData  — latest day OHLCV for all EQ symbols (Market Data tab)
+        BuyHistory  — OHLCV from signal→exit for bought stocks (Stock History tab)
     """
     wb = Workbook()
     ws = wb.active
@@ -815,6 +924,22 @@ def write_picks_excel(rows, columns, out_path):
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0
+
+    # ── Extra sheet: MarketData ───────────────────────────────────────────────
+    if market_data:
+        ws_md = wb.create_sheet("MarketData")
+        ws_md.append(OHLCV_COLS)
+        for r in market_data:
+            ws_md.append(r)
+        _style_ohlcv_header(ws_md)
+
+    # ── Extra sheet: BuyHistory ───────────────────────────────────────────────
+    if buy_history:
+        ws_bh = wb.create_sheet("BuyHistory")
+        ws_bh.append(OHLCV_COLS)
+        for r in buy_history:
+            ws_bh.append(r)
+        _style_ohlcv_header(ws_bh)
 
     wb.save(out_path)
 
@@ -988,7 +1113,12 @@ def main():
     last_data_ts   = eq_df["DATE1"].max()
     last_data_date = last_data_ts.to_pydatetime().replace(tzinfo=None)
     print(f"Last data date  : {last_data_date.strftime('%d-%m-%Y')}")
-    del eq_df
+
+    # For full mode: free eq_df memory immediately (not needed after price_dict)
+    # For quick mode: keep eq_df alive until market data extraction below
+    if mode == "full":
+        del eq_df
+        eq_df = None
 
     # ══════════════════════════════════════════════════════════════════════════
     # QUICK MODE -> Per-trade PICKS SHEET
@@ -1014,6 +1144,7 @@ def main():
 
         columns  = get_picks_columns(mb)
         all_rows = []
+        bought_ranges = []   # (symbol, start_ts, end_ts) for Stock History sheet
         counts   = {"Executed": 0, "Pending": 0, "Expired": 0, "Invalid": 0,
                     "Open": 0, "Closed": 0, "Profit": 0, "Loss": 0}
 
@@ -1039,11 +1170,35 @@ def main():
                     if "PROFIT" in rs: counts["Profit"] += 1
                     elif "LOSS"  in rs: counts["Loss"]  += 1
 
+                # Track bought stocks for the BuyHistory sheet
+                if sim.get("first_buy_date") is not None:
+                    sym_str  = str(sig["SYMBOL"])
+                    # Start 7 days before signal to show context
+                    start_ts = pd.Timestamp(sig["SIGNAL_DATE"]) - pd.Timedelta(days=7)
+                    end_ts   = (pd.Timestamp(sim["exit_date"])
+                                if sim.get("exit_date")
+                                else pd.Timestamp(last_data_date))
+                    bought_ranges.append((sym_str, start_ts, end_ts))
+
+        # ── Extract market data BEFORE del eq_df ──────────────────────────────
+        latest_mkt_data  = build_latest_market_data(eq_df) if eq_df is not None else []
+        buy_history_data = build_buy_history(eq_df, bought_ranges)
+        del eq_df  # Free memory
+
+        # ── Sort Picks by BuyDate descending (latest first, None rows at end) ─
+        # BuyDate is at column index 5 (0-based) in the picks row
+        all_rows.sort(
+            key=lambda r: (0 if r[5] is None else 1, r[5] if r[5] else datetime.min),
+            reverse=True
+        )
+
         prefix   = "QuickRun_Picks"
         out_path = os.path.join(month_dir, f"{prefix}_{ts_str}.xlsx")
 
         print(f"Writing {len(all_rows):,} rows to Excel (sheet: Pickse)...")
-        write_picks_excel(all_rows, columns, out_path)
+        write_picks_excel(all_rows, columns, out_path,
+                          market_data=latest_mkt_data,
+                          buy_history=buy_history_data)
 
         print(f"\n✅ Picks sheet saved : {out_path}")
         print(f"✅ Total signals     : {len(all_rows):,}")
