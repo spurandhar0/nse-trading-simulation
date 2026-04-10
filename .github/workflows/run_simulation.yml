@@ -1,0 +1,103 @@
+name: Run Full Simulation Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_consolidate_csv:
+        description: 'Step 1 – Consolidate bhav CSVs to DB (skip if db/ already built)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      run_filter_eq:
+        description: 'Step 2 – Filter EQ series (skip if eq_data already built)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      run_ath:
+        description: 'Step 3 – Compute All Time High per symbol'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      run_signals:
+        description: 'Step 4 – Filter trading signals (5-day dip + ATH)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      run_simulation:
+        description: 'Step 5 – Run parameter test simulation → Excel output'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      run_consolidate_results:
+        description: 'Step 6 – Consolidate all result Excels into one file'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: write
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300    # 5 hours max
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy pyarrow openpyxl
+
+      # ── Step 1: Consolidate CSVs ────────────────────────────────────────────
+      - name: Step 1 – Consolidate CSVs
+        if: ${{ github.event.inputs.run_consolidate_csv == 'true' }}
+        run: python src/01_consolidate_csv.py
+
+      # ── Step 2: Filter EQ ───────────────────────────────────────────────────
+      - name: Step 2 – Filter EQ Series
+        if: ${{ github.event.inputs.run_filter_eq == 'true' }}
+        run: python src/02_filter_eq.py
+
+      # ── Step 3: ATH ─────────────────────────────────────────────────────────
+      - name: Step 3 – Compute ATH
+        if: ${{ github.event.inputs.run_ath == 'true' }}
+        run: python src/03_find_ath.py
+
+      # ── Step 4: Filter Signals ──────────────────────────────────────────────
+      - name: Step 4 – Filter Signals
+        if: ${{ github.event.inputs.run_signals == 'true' }}
+        run: python src/04_filter_signals.py
+
+      # ── Step 5: Run Simulation ──────────────────────────────────────────────
+      - name: Step 5 – Run Simulation
+        if: ${{ github.event.inputs.run_simulation == 'true' }}
+        run: python src/05_run_simulation.py
+
+      # ── Step 6: Consolidate Results ─────────────────────────────────────────
+      - name: Step 6 – Consolidate Results
+        if: ${{ github.event.inputs.run_consolidate_results == 'true' }}
+        run: python src/06_consolidate_results.py
+
+      # ── Commit all outputs ──────────────────────────────────────────────────
+      - name: Commit outputs to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add db/ output/
+          git diff --cached --quiet || git commit -m "sim: results $(date +'%d-%b-%Y %H:%M')"
+          git push

@@ -1,0 +1,39 @@
+name: NSE Bhavcopy Fetch (Daily 6:15PM IST)
+
+on:
+  schedule:
+    - cron: "45 12 * * 1-5"   # 6:15 PM IST = 12:45 UTC, Mon-Fri
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run NSE Bhavcopy Fetch
+        run: python src/nse_bhavcopy_fetch.py
+
+      - name: Commit bhav data to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bhav_data/
+          git diff --cached --quiet || git commit -m "auto: NSE bhavcopy $(date +'%d-%b-%Y')"
+          git push

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Data files (large)
+db/*.parquet
+db/*.xlsx
+
+# Output (committed selectively)
+output/*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
