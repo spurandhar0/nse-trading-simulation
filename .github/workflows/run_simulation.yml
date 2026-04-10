@@ -65,6 +65,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── Cache db/ parquet files between runs ────────────────────────────────
+      # If step toggles are set to 'false', the cached parquets are used instead.
+      # Cache miss forces rebuild even if toggle is 'false'.
+      - name: Restore db/ cache
+        id: db-cache
+        uses: actions/cache@v4
+        with:
+          path: db/
+          key: db-${{ runner.os }}-${{ hashFiles('bhav_data/**') }}
+          restore-keys: |
+            db-${{ runner.os }}-
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -75,17 +87,29 @@ jobs:
 
       # ── Step 1: Consolidate CSVs ─────────────────────────────────────────────
       - name: Step 1 – Consolidate CSVs
-        if: ${{ github.event.inputs.run_consolidate_csv == 'true' }}
+        if: >-
+          ${{
+            github.event.inputs.run_consolidate_csv == 'true' ||
+            steps.db-cache.outputs.cache-hit != 'true'
+          }}
         run: python src/01_consolidate_csv.py
 
       # ── Step 2: Filter EQ ────────────────────────────────────────────────────
       - name: Step 2 – Filter EQ Series
-        if: ${{ github.event.inputs.run_filter_eq == 'true' }}
+        if: >-
+          ${{
+            github.event.inputs.run_filter_eq == 'true' ||
+            steps.db-cache.outputs.cache-hit != 'true'
+          }}
         run: python src/02_filter_eq.py
 
       # ── Step 3: ATH ──────────────────────────────────────────────────────────
       - name: Step 3 – Compute ATH
-        if: ${{ github.event.inputs.run_ath == 'true' }}
+        if: >-
+          ${{
+            github.event.inputs.run_ath == 'true' ||
+            steps.db-cache.outputs.cache-hit != 'true'
+          }}
         run: python src/03_find_ath.py
 
       # ── Step 4: Filter Signals (full mode — all filter param combos) ─────────
