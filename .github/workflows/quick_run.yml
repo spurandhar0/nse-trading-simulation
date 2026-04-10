@@ -92,37 +92,36 @@ jobs:
           name: quickrun-output-${{ github.run_number }}
           path: output/
 
-      # ── Deploy dashboard to gh-pages branch ─────────────────────────────────
-      - name: Deploy dashboard to GitHub Pages
+      # ── Deploy dashboard to public nse-btst-dashboard repo ──────────────────
+      - name: Deploy dashboard to public GitHub Pages repo
         if: steps.sim.outcome == 'success'
         run: |
           # Configure git
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Create a clean deploy directory
-          mkdir -p /tmp/deploy
+          # Clone the public dashboard repo
+          git clone \
+            "https://x-access-token:${{ secrets.GH_PAT }}@github.com/spurandhar0/nse-btst-dashboard.git" \
+            /tmp/dashboard-repo
 
           # Copy dashboard HTML (as index.html)
-          cp dashboard/index.html /tmp/deploy/index.html
+          cp dashboard/index.html /tmp/dashboard-repo/index.html
 
           # Copy the latest quickrun Excel (auto-fetched by the dashboard)
           if [ -f output/latest_quickrun.xlsx ]; then
-            cp output/latest_quickrun.xlsx /tmp/deploy/latest_quickrun.xlsx
+            cp output/latest_quickrun.xlsx /tmp/dashboard-repo/latest_quickrun.xlsx
             echo "✅ Copied latest_quickrun.xlsx"
           else
             echo "⚠️ latest_quickrun.xlsx not found — dashboard will show load error"
           fi
 
           # Write a simple metadata file
-          echo "{\"last_run\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\"run_number\":${{ github.run_number }}}" > /tmp/deploy/meta.json
+          echo "{\"last_run\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\"run_number\":${{ github.run_number }}}" > /tmp/dashboard-repo/meta.json
 
-          # Push to gh-pages branch (force-replace entire branch content)
-          cd /tmp/deploy
-          git init -b gh-pages
+          # Commit and push to public repo main branch
+          cd /tmp/dashboard-repo
           git add .
-          git commit -m "Deploy dashboard — Run #${{ github.run_number }} $(date -u '+%Y-%m-%d %H:%M UTC')"
-          git push --force \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            HEAD:gh-pages
-          echo "✅ Dashboard deployed to gh-pages"
+          git diff --cached --quiet || git commit -m "Deploy dashboard — Run #${{ github.run_number }} $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push origin main
+          echo "✅ Dashboard deployed → https://spurandhar0.github.io/nse-btst-dashboard/"
