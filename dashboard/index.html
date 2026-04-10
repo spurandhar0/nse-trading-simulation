@@ -972,11 +972,8 @@ function filteredCalls() {
     return filteredRows().filter(r => {
         const orderValue = String(r['Order'] || '').trim().toLowerCase();
         
-        // Check for "Invalid" - only include if Action column has specific message
-        if (orderValue === 'invalid') {
-            const resultValue = String(r['Result'] || '').trim();
-            return resultValue === 'Invalid: No market data found';
-        }
+        // All "Invalid" rows = Fresh Calls (signal detected, no trade placed yet)
+        if (orderValue === 'invalid') return true;
         
         // Always include "Pending" (these are open calls)
         if (orderValue === 'pending') return true;
@@ -1485,7 +1482,7 @@ function renderCalls(){
         const isFresh=orderStatus==='invalid';
         const statusBtnClass=isFresh?'fresh-call':'open-call';
         const statusText=isFresh?'Fresh Call':'Open Call';
-        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(buyPrice*1.25)}</td><td class="red">${fmtCur(buyPrice*0.75)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
+        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
     }
     html+='</tbody></table>';
     els.callsTable.innerHTML=html
