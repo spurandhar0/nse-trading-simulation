@@ -200,7 +200,17 @@ def main():
     ath_df  = pd.read_parquet(ATH_FILE, columns=["SYMBOL", "ATH_PRICE"])
     ath_map = dict(zip(ath_df["SYMBOL"], ath_df["ATH_PRICE"]))
 
-    symbols = eq["SYMBOL"].unique()
+    symbols    = eq["SYMBOL"].unique()
+    data_start = eq["DATE1"].min()
+    data_end   = eq["DATE1"].max()
+    scan_from  = max(start_date, data_start)
+    scan_to    = min(end_date,   data_end)
+    print(f"  Data available  : {data_start.date()} → {data_end.date()}")
+    print(f"  Signal range    : {start_date.date()} → {end_date.date()}")
+    print(f"  Scanning signals: {scan_from.date()} → {scan_to.date()}")
+    if scan_to < scan_from:
+        print("❌ No overlap between data range and signal range. Check config signal_start_date / signal_end_date.")
+        raise SystemExit(1)
     print(f"Processing {len(symbols):,} symbols × {len(filter_combos)} filter combos...")
 
     all_signals = []
