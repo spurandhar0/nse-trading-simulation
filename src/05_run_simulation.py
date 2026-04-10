@@ -14,38 +14,34 @@ Modes:
         File  : output/YYYY-MM/QuickRun_Picks_YYYYMMDD_HHMMSS.xlsx
 
   --mode full
-        All parameter combinations from param_sweep → aggregate stats.
+        All parameter combinations from param_sweep -> aggregate stats.
         Output: 43-column summary — one row per param combo.
         File  : output/YYYY-MM/Results_YYYYMMDD_HHMMSS.xlsx
 
-PICKS SHEET COLUMNS (quick mode, matching VBA modFiltering/modConfig exactly):
+SIMULATION RULES:
+  - Entry  : D+1 low <= signal_close  -> buy at signal_close price (B0)
+  - Additional buys: when buy_count <= max_buys AND next-buy-level >= stop_price
+  - Same-day buy and sell NOT allowed (exit checks skip the buy day itself)
+  - Invalid: signal date is the last available date for that symbol (no D+1 data)
+  - Pending: buy not triggered yet, within pending_window_days of signal
+  - Expired: buy not triggered, beyond pending_window_days
+  - FE-MD  : market_days >= max_duration (trading days counted after first buy)
+  - FE-CD  : calendar_days >= force_exit_calendar_days (90 by default)
+  - Stop   : based on signal_close (USE_AVGBUY_FOR_STOPLOSS = False)
+  - Target : updated on each additional buy (USE_AVGBUY_FOR_TARGET = True)
+
+PICKS SHEET COLUMNS (quick mode — 50 columns for max_buys=2):
   1DChange%, StockName, 5DLow%, 5DLowPrice, RecentLTP,
   BuyDate, BuyClPrice, 5DLowDate, TodayDate,
   BuyCount, AvgBuyPrice, TotalQty, TargetPrice, StoplossPrice, TotalInvestment,
   Order, Status, Duration, DurationGroup, Profits, GainLoss%, Result, ExitType,
-  Action, BuyChance, SoldDate, SoldPrice, SoldPrevClose, SoldOpen, SoldHigh,
-  SoldLow, SoldClose,
+  Action, BuyChance, SoldDate, SoldPrice, SoldPrevClose, SoldOpen,
+  SoldHigh, SoldLow, SoldClose,
   B0_BoughtDate/PrevClose/Open/High/Low/Close,
   B1_BoughtDate/PrevClose/Open/High/Low/Close,
-  ... up to B(max_buys)_...
+  B2_BoughtDate/PrevClose/Open/High/Low/Close
 
-SIMULATION RULES:
-  - Loop processes dates EXCLUDING the last (today's) data point
-  - max_buys = number of ADDITIONAL dip buys (total buys = max_buys+1: B0..B(max_buys))
-  - Entry: Low on day D+1 touches signal_close → buy executed (B0)
-  - Additional buys: when buy_count <= max_buys and buy_level >= stop_price
-  - FE-MD : market_days >= max_duration (trading days since first buy)
-  - FE-CD : calendar_days >= force_exit_calendar_days (90 by default)
-  - Stop  : based on signal_close (USE_AVGBUY_FOR_STOPLOSS = False)
-  - Target: updated on each additional buy (USE_AVGBUY_FOR_TARGET = True)
-  - DurationGroup: integer buckets 5,10,15,20,25,30,35,40,45,50 and '50+' for >50
-  - GainLoss%: decimal fraction (NOT multiplied by 100)
-  - 1DChange%, 5DLow%: decimal fraction (NOT multiplied by 100)
-  - TodayDate: last available data date (None for Invalid)
-  - BuyChance: 'Buy Chance' when next-buy-level was reached during trade, else None
-  - Action: 'Buy' (Pending) | 'Skip' (Invalid/Expired) | 'Hold' (Open) | 'Exit' (Closed)
-
-43 AGGREGATE COLUMNS (full mode, exact order):
+43 AGGREGATE COLUMNS (full mode — exact order):
   Test, DAYSBACK, PCTMIN, PCTMAX, ATHMIN, ATHMAX, MAXBUYS, BUYDROP,
   TARGET, STOPLOSS, MAXDURA, WinRate, TotalTrade, Executed, Open, Closed,
   ProfitTGT, LossSL, LossFEMD, LossFECD, ProfitFEMD, ProfitFECD,
@@ -85,6 +81,12 @@ COLUMNS_43 = [
 NAVY  = "00203864"
 WHITE = "00FFFFFF"
 LIGHT = "00F2F2F2"
+
+# Excel number format strings
+FMT_DATE  = "DD-MM-YYYY"
+FMT_PRICE = "0.00"
+FMT_PCT   = "0.00%"
+FMT_INT   = "General"
 
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -154,11 +156,13 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     Simulate one trade and return all per-trade details for the picks sheet.
 
     Key rules:
-      - Loop processes dates[start_idx+1 .. last_idx-1]  (last data day = "today", excluded)
-      - max_buys = additional dip buys; total buy slots = max_buys+1 (B0..B(max_buys))
-      - Additional buy triggers when buy_count <= max_buys
-      - BuyChance = 'Buy Chance' if next-buy-level was ever touched, else None
-      - GainLoss% = decimal (not *100); DurationGroup = integer bucket
+      - If start_idx >= last_idx  (signal date is the last available date for
+        this symbol) -> INVALID (no D+1 data to attempt entry).
+      - Loop: range(start_idx+1, last_idx)  -- excludes the very last data day
+        ("today") from both buy attempts and exit checks.
+      - Same-day buy and sell NOT allowed: exit checks skip the buy day itself.
+      - max_buys = number of ADDITIONAL dip buys;
+        total buy slots = max_buys+1 (B0..B(max_buys))
     """
     invalid = {
         "order": "Invalid", "status": None, "action": "Skip",
@@ -195,7 +199,11 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     start_idx = day_map[sig_ts]
     last_idx  = len(dates) - 1
 
-    # Prices for targets and stops
+    # ── INVALID: signal on last available date for this symbol — no D+1 ──────
+    if start_idx >= last_idx:
+        return invalid
+
+    # Prices for target and stop (based on signal_close per VBA logic)
     stop_price   = round(signal_close * (1 - stoploss_pct), 2)
     target_price = round(signal_close * (1 + target_pct),  2)
 
@@ -212,9 +220,9 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     exit_date        = None
     exit_idx         = -1
     buys             = []
-    had_buy_chance   = False   # tracks if next-buy-level was ever touched
+    had_buy_chance   = False
 
-    # ── Main loop — exclude the very last data point (= "today") ─────────────
+    # ── Main loop — D+1 through D+(N-2); last data point excluded ────────────
     for i in range(start_idx + 1, last_idx):
         curr_ts  = pd.Timestamp(dates[i])
         low_px   = float(lows[i])
@@ -224,7 +232,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
         prev_px  = float(prevs[i])
 
         if buy_count == 0:
-            # ── First buy: day low touches signal_close ──
+            # ── First buy (B0): day low touches signal_close ─────────────────
             if low_px <= signal_close:
                 buy_count      = 1
                 first_buy_date = curr_ts
@@ -235,6 +243,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
                 total_qty        = qty
                 total_investment = signal_close * qty
                 avg_buy_price    = round(total_investment / total_qty, 2)
+                # Target updates on each buy (USE_AVGBUY_FOR_TARGET = True)
                 target_price     = round(avg_buy_price * (1 + target_pct), 2)
                 buys.append({
                     "date":       curr_ts,
@@ -251,7 +260,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
 
             cal_days = (curr_ts - first_buy_date).days if first_buy_date else 0
 
-            # ── Check exits (only on non-buy days) ──
+            # ── Check exits (only on non-buy days — same-day sell not allowed) ─
             if not is_buy_day:
                 if low_px <= stop_price:
                     exit_found = True
@@ -282,10 +291,9 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
                     exit_idx   = i
                     break
 
-            # ── Additional buys (buy_count <= max_buys means we can buy more) ──
+            # ── Additional buys (buy_count <= max_buys means we can buy more) ─
             if not exit_found and not is_buy_day and buy_count <= max_buys:
                 buy_level = round(avg_buy_price * (1 - buy_drop), 2)
-                # Track if buy level was ever touched (for BuyChance field)
                 if low_px <= buy_level:
                     had_buy_chance = True
                     if buy_level >= stop_price:
@@ -307,7 +315,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
                             "close":      close_px,
                         })
 
-    # ── Determine order / status / action ────────────────────────────────────
+    # ── Determine order / status / action ─────────────────────────────────────
     if buy_count == 0:
         last_ts   = pd.Timestamp(dates[last_idx])
         days_from = (last_ts - sig_ts).days
@@ -318,7 +326,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
             order = "Expired"
             action = "Skip"
         return {
-            "order": order, "status": order if order == "Expired" else "Not Triggered",
+            "order": order,
+            "status": "Not Triggered" if order == "Pending" else "Expired",
             "action": action,
             "buy_count": 0, "avg_buy_price": None, "total_qty": None,
             "total_investment": None,
@@ -333,9 +342,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
             "buys": [], "had_buy_chance": False,
         }
 
-    # ── Executed trade ────────────────────────────────────────────────────────
+    # ── Executed — Open ───────────────────────────────────────────────────────
     if not exit_found:
-        # Open — use last-processed price for unrealized P&L (computed later in build_picks_row)
         return {
             "order": "Executed", "status": "Open", "action": "Hold",
             "buy_count": buy_count, "avg_buy_price": avg_buy_price,
@@ -354,7 +362,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
             "buys": buys, "had_buy_chance": had_buy_chance,
         }
 
-    # ── Closed trade ──────────────────────────────────────────────────────────
+    # ── Executed — Closed ─────────────────────────────────────────────────────
     profit   = round((exit_price - avg_buy_price) * total_qty, 2)
     gain_pct = round((exit_price - avg_buy_price) / avg_buy_price, 4) \
                if avg_buy_price > 0 else 0.0
@@ -391,7 +399,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     }
 
 
-# ─── SIMULATION (SIMPLE — Full mode aggregate stats) ──────────────────────────
+# ─── SIMULATION (SIMPLE — Full mode aggregate stats) ─────────────────────────
 
 def simulate_trade(sym, signal_date, signal_close, price_dict,
                    max_buys, buy_drop, target_pct, stoploss_pct,
@@ -415,6 +423,10 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     start_idx = day_map[sig_ts]
     last_idx  = len(dates) - 1
 
+    # ── INVALID: signal on last available date for this symbol ────────────────
+    if start_idx >= last_idx:
+        return {"order": "Invalid"}
+
     stop_price   = round(signal_close * (1 - stoploss_pct), 2)
     target_price = round(signal_close * (1 + target_pct),  2)
 
@@ -430,7 +442,7 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     exit_price       = 0.0
     exit_date        = None
 
-    for i in range(start_idx + 1, last_idx):  # exclude last (today)
+    for i in range(start_idx + 1, last_idx):
         curr_ts  = pd.Timestamp(dates[i])
         low_px   = float(lows[i])
         high_px  = float(highs[i])
@@ -506,7 +518,7 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     }
 
 
-# ─── AGGREGATE STATS (full mode) ──────────────────────────────────────────────
+# ─── AGGREGATE STATS (full mode) ─────────────────────────────────────────────
 
 def aggregate_stats(results):
     wins=0; losses=0
@@ -591,12 +603,12 @@ def aggregate_stats(results):
     }
 
 
-# ─── PICKS SHEET HELPERS ──────────────────────────────────────────────────────
+# ─── PICKS SHEET HELPERS ─────────────────────────────────────────────────────
 
 def get_picks_columns(max_buys):
     """
-    Return list of column headers for Picks Sheet.
-    max_buys additional dip buys → total buy blocks = max_buys+1 (B0..B(max_buys))
+    Column headers for Picks Sheet.
+    max_buys additional dip buys -> total buy blocks = max_buys+1 (B0..B(max_buys))
     """
     cols = [
         "1DChange%", "StockName", "5DLow%", "5DLowPrice", "RecentLTP",
@@ -615,6 +627,29 @@ def get_picks_columns(max_buys):
     return cols
 
 
+def _col_fmt(col_name):
+    """Return openpyxl number format string for a column name."""
+    if "Date" in col_name or col_name.endswith("Date"):
+        return FMT_DATE
+    if col_name in ("1DChange%", "5DLow%", "GainLoss%"):
+        return FMT_PCT
+    if col_name in ("BuyCount", "TotalQty", "Duration", "DurationGroup", "BuyChance",
+                    "Order", "Status", "Result", "ExitType", "Action",
+                    "StockName", "WinRate"):
+        return FMT_INT
+    # Price / money columns
+    if col_name in ("5DLowPrice", "RecentLTP", "BuyClPrice", "AvgBuyPrice",
+                    "TargetPrice", "StoplossPrice", "TotalInvestment",
+                    "Profits", "SoldPrice", "SoldPrevClose", "SoldOpen",
+                    "SoldHigh", "SoldLow", "SoldClose"):
+        return FMT_PRICE
+    # Buy-block price columns  (B0_PrevClose, B0_Open, etc.)
+    if "_PrevClose" in col_name or "_Open" in col_name or "_High" in col_name \
+       or "_Low" in col_name or "_Close" in col_name:
+        return FMT_PRICE
+    return FMT_INT
+
+
 def _to_dt(ts):
     """Convert to Python datetime or None."""
     if ts is None:
@@ -631,29 +666,32 @@ def _to_dt(ts):
 def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     """
     Assemble one picks-sheet row from a signal dict and simulation result.
-    All date fields are Python datetime objects.
-    GainLoss%, 1DChange%, 5DLow% are decimal fractions (not *100).
-    last_data_date: Python datetime of the last available data date (for TodayDate).
+    All date fields are Python datetime objects (formatted DD-MM-YYYY by writer).
+    Price fields are rounded to 2 decimal places.
+    GainLoss%, 1DChange%, 5DLow% are stored as decimal fractions (e.g. -0.08),
+    formatted as percentage in Excel via 0.00% format.
     """
-    sym = str(sig["SYMBOL"])
+    sym   = str(sig["SYMBOL"])
     order = sim["order"]
 
     # RecentLTP = latest available close for this symbol
     recent_ltp = None
     if sym in price_dict:
         recent_ltp = round(float(price_dict[sym]["closes"][-1]), 2)
-
-    # If recent_ltp not available, use signal close
     if recent_ltp is None:
         recent_ltp = round(float(sig["SIGNAL_CLOSE"]), 2)
 
     # Date fields as Python datetime objects
-    buy_date     = _to_dt(sig["SIGNAL_DATE"])
-    min5d_date   = _to_dt(sig["MIN_5D_DATE"])
-    today_date   = last_data_date if order != "Invalid" else None
-    sold_date    = _to_dt(sim["exit_date"]) if sim["exit_found"] else None
+    buy_date   = _to_dt(sig["SIGNAL_DATE"])
+    min5d_date = _to_dt(sig["MIN_5D_DATE"])
+    today_date = last_data_date if order != "Invalid" else None
+    sold_date  = _to_dt(sim["exit_date"]) if sim["exit_found"] else None
 
-    # P&L for Open trades (unrealized, using recent_ltp)
+    # BuyClPrice — the signal-day close price
+    # For Invalid rows this is still the signal close (same as expected output)
+    buy_cl_price = round(float(sig["SIGNAL_CLOSE"]), 2)
+
+    # Unrealized P&L for Open trades (computed using recent_ltp)
     profit   = sim["profit"]
     gain_pct = sim["gain_pct"]
     if order == "Executed" and sim["status"] == "Open":
@@ -664,16 +702,16 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
             gain_pct = round((recent_ltp - avg_buy) / avg_buy, 4)
 
     row = [
-        float(sig["PCT_1D_CHANGE"]),           # 1DChange%  — decimal fraction
+        float(sig["PCT_1D_CHANGE"]),           # 1DChange%  (decimal fraction)
         sym,                                    # StockName
-        float(sig["PCT_FROM_LOW"]),             # 5DLow%     — decimal fraction
+        float(sig["PCT_FROM_LOW"]),             # 5DLow%     (decimal fraction)
         round(float(sig["MIN_5D_CLOSE"]), 2),  # 5DLowPrice
         recent_ltp,                             # RecentLTP
-        buy_date,                               # BuyDate (signal date as datetime)
-        round(float(sig["SIGNAL_CLOSE"]), 2),  # BuyClPrice
-        min5d_date,                             # 5DLowDate as datetime
-        today_date,                             # TodayDate = last data date (None if Invalid)
-        sim["buy_count"],                       # BuyCount (0 for Pending, None for Invalid)
+        buy_date,                               # BuyDate (datetime)
+        buy_cl_price,                           # BuyClPrice
+        min5d_date,                             # 5DLowDate (datetime)
+        today_date,                             # TodayDate (datetime or None)
+        sim["buy_count"],                       # BuyCount
         sim["avg_buy_price"],                   # AvgBuyPrice
         sim["total_qty"],                       # TotalQty
         sim["target_price"],                    # TargetPrice
@@ -684,12 +722,12 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
         sim["market_days"],                     # Duration
         sim["duration_group"],                  # DurationGroup
         profit,                                 # Profits
-        gain_pct,                               # GainLoss% — decimal fraction
+        gain_pct,                               # GainLoss% (decimal fraction)
         sim["result_str"],                      # Result
         sim["exit_type"],                       # ExitType
         sim["action"],                          # Action
         sim["buy_chance"],                      # BuyChance
-        sold_date,                              # SoldDate as datetime
+        sold_date,                              # SoldDate (datetime)
         sim["exit_price"],                      # SoldPrice
         sim["sold_prev_close"],                 # SoldPrevClose
         sim["sold_open"],                       # SoldOpen
@@ -720,18 +758,21 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
 def write_picks_excel(rows, columns, out_path):
     """
     Write picks sheet to Excel.
-    Sheet name: Pickse
-    Row 1: bold header (navy background, white text)
-    Row 2+: data with alternating row fill
-    No title row above headers.
+      Sheet name : Pickse
+      Row 1      : Bold header — navy background, white text
+      Row 2+     : Data with alternating row fill
+      Formats    : prices = 0.00 | percentages = 0.00% | dates = DD-MM-YYYY
     """
     wb = Workbook()
     ws = wb.active
     ws.title = "Pickse"
 
-    thin = Side(style="thin", color="BFBFBF")
-    bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
-    ncols = len(columns)
+    thin    = Side(style="thin", color="BFBFBF")
+    bdr     = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ncols   = len(columns)
+
+    # Pre-compute per-column format strings
+    col_fmts = [_col_fmt(c) for c in columns]
 
     # ── Header row (row 1) ────────────────────────────────────────────────────
     ws.append(columns)
@@ -746,13 +787,14 @@ def write_picks_excel(rows, columns, out_path):
     # ── Data rows (row 2+) ────────────────────────────────────────────────────
     for r_idx, row in enumerate(rows):
         ws.append(row)
-        fill_color = LIGHT if (r_idx % 2 == 0) else "00FFFFFF"
-        actual_row = r_idx + 2
-        for col in range(1, ncols + 1):
-            cell           = ws.cell(row=actual_row, column=col)
-            cell.fill      = PatternFill("solid", fgColor=fill_color)
-            cell.border    = bdr
-            cell.alignment = Alignment(horizontal="center")
+        fill_color  = LIGHT if (r_idx % 2 == 0) else "00FFFFFF"
+        actual_row  = r_idx + 2
+        for col_idx in range(1, ncols + 1):
+            cell               = ws.cell(row=actual_row, column=col_idx)
+            cell.fill          = PatternFill("solid", fgColor=fill_color)
+            cell.border        = bdr
+            cell.alignment     = Alignment(horizontal="center")
+            cell.number_format = col_fmts[col_idx - 1]
 
     # ── Freeze panes & auto-filter ────────────────────────────────────────────
     ws.freeze_panes = ws.cell(row=2, column=1)
@@ -761,9 +803,11 @@ def write_picks_excel(rows, columns, out_path):
 
     # ── Column widths ─────────────────────────────────────────────────────────
     for col_idx, col_name in enumerate(columns, 1):
-        w = 14
-        if col_name == "StockName":         w = 16
-        elif "Date" in col_name:            w = 13
+        w = 13
+        if col_name == "StockName":                    w = 16
+        elif "Date" in col_name:                       w = 13
+        elif col_name in ("Result", "ExitType"):       w = 22
+        elif col_name in ("Order", "Status", "Action"): w = 14
         ws.column_dimensions[get_column_letter(col_idx)].width = w
 
     # ── Page setup ────────────────────────────────────────────────────────────
@@ -775,7 +819,7 @@ def write_picks_excel(rows, columns, out_path):
     wb.save(out_path)
 
 
-# ─── STYLE (full mode aggregate sheet) ────────────────────────────────────────
+# ─── STYLE (full mode aggregate sheet) ───────────────────────────────────────
 
 def style_sheet(ws, mode_label):
     thin = Side(style="thin", color="BFBFBF")
@@ -822,7 +866,7 @@ def style_sheet(ws, mode_label):
     ws.page_setup.fitToHeight = 0
 
 
-# ─── NO-SIGNALS DIAGNOSTIC FILE ───────────────────────────────────────────────
+# ─── NO-SIGNALS DIAGNOSTIC FILE ──────────────────────────────────────────────
 
 def save_no_signals_file(cfg, mode, mode_label, symbol_filter, signals_file, month_dir, ts_str):
     prefix   = "QuickRun_Picks" if mode == "quick" else "Results"
@@ -850,7 +894,7 @@ def save_no_signals_file(cfg, mode, mode_label, symbol_filter, signals_file, mon
         ("Pct max (5d dip)",  q_or_p.get("pct_max", "?")),
         ("Symbol filter",     ", ".join(sorted(symbol_filter)) if symbol_filter else "ALL"),
         ("", ""),
-        ("Root Cause", "ATH is computed from uploaded data only. Short data → ATH = recent high."),
+        ("Root Cause", "ATH computed from uploaded data only. Short data -> ATH near current price."),
         ("",           "Most stocks appear near ATH and fail the -30% to -60% ATH filter."),
         ("Solution",   "Upload 1-2 years of historical NSE bhav CSVs to bhav_data/ folder."),
         ("",           "Re-run with rebuild_db=true after uploading."),
@@ -893,22 +937,22 @@ def main():
     print(f"Mode            : {mode_label}")
     print(f"Trade combos    : {len(trade_combos):,}")
 
-    # ── Symbol filter (CLI > config > all) ───────────────────────────────────
+    # ── Symbol filter (CLI > config > all) ────────────────────────────────────
     symbol_filter = set()
     cli_syms = args.symbols.strip()
     if cli_syms:
         symbol_filter = {s.strip().upper() for s in cli_syms.split(",") if s.strip()}
-        print(f"Symbol filter   : CLI override → {sorted(symbol_filter)}")
+        print(f"Symbol filter   : CLI override -> {sorted(symbol_filter)}")
     else:
         section     = cfg.get("quick_run" if mode == "quick" else "param_sweep", {})
         config_syms = section.get("watch_symbols", [])
         if config_syms:
             symbol_filter = {s.strip().upper() for s in config_syms if s.strip()}
-            print(f"Symbol filter   : config watch_symbols → {len(symbol_filter)} symbols")
+            print(f"Symbol filter   : config watch_symbols -> {len(symbol_filter)} symbols")
         else:
-            print("Symbol filter   : ALL symbols")
+            print("Symbol filter   : ALL EQ symbols")
 
-    # ── Load signals ─────────────────────────────────────────────────────────
+    # ── Load signals ──────────────────────────────────────────────────────────
     print("Loading signals...")
     sig_df = pd.read_parquet(signals_file)
     sig_df["SIGNAL_DATE"] = pd.to_datetime(sig_df["SIGNAL_DATE"])
@@ -921,7 +965,7 @@ def main():
 
     print(f"  Total signals : {len(sig_df):,}")
 
-    # ── Output path (month subfolder) ────────────────────────────────────────
+    # ── Output path (month subfolder) ─────────────────────────────────────────
     ts_now    = datetime.now()
     ts_str    = ts_now.strftime("%Y%m%d_%H%M%S")
     month_dir = os.path.join(OUTPUT_DIR, ts_now.strftime("%Y-%m"))
@@ -932,7 +976,7 @@ def main():
         save_no_signals_file(cfg, mode, mode_label, symbol_filter, signals_file, month_dir, ts_str)
         raise SystemExit(0)
 
-    # ── Load EQ price data ───────────────────────────────────────────────────
+    # ── Load EQ price data ────────────────────────────────────────────────────
     print("Loading EQ price data...")
     eq_df          = pd.read_parquet(EQ_FILE)
     eq_df["DATE1"] = pd.to_datetime(eq_df["DATE1"])
@@ -943,12 +987,12 @@ def main():
     # Last data date (= "TodayDate" for non-Invalid rows)
     last_data_ts   = eq_df["DATE1"].max()
     last_data_date = last_data_ts.to_pydatetime().replace(tzinfo=None)
-    print(f"Last data date  : {last_data_date.date()}")
+    print(f"Last data date  : {last_data_date.strftime('%d-%m-%Y')}")
     del eq_df
 
-    # ════════════════════════════════════════════════════════════════════════
-    # QUICK MODE → Per-trade PICKS SHEET
-    # ════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # QUICK MODE -> Per-trade PICKS SHEET
+    # ══════════════════════════════════════════════════════════════════════════
     if mode == "quick":
         q    = cfg["quick_run"]
         mb   = q["max_buys"]
@@ -957,13 +1001,15 @@ def main():
         sl   = q["stoploss"]
         mdur = q["max_duration"]
 
-        print(f"Parameters: DaysBack={q['days_back']} PctMin={q['pct_min']:.0%} "
-              f"PctMax={q['pct_max']:.0%} ATHMin={q['ath_min']:.0%} ATHMax={q['ath_max']:.0%} "
+        print(f"Parameters      : DaysBack={q['days_back']} "
+              f"PctMin={q['pct_min']:.0%} PctMax={q['pct_max']:.0%} "
+              f"ATHMin={q['ath_min']:.0%} ATHMax={q['ath_max']:.0%} "
               f"MaxBuys={mb} BuyDrop={bd:.0%} Target={tgt:.0%} SL={sl:.0%} MaxDur={mdur}")
         print(f"Running picks simulation for {len(sig_df):,} signals...")
 
-        # Deduplicate signals (same symbol+date) — keep first for quick mode
-        sig_df_picks = sig_df.drop_duplicates(subset=["SYMBOL", "SIGNAL_DATE"]).reset_index(drop=True)
+        # Deduplicate: same symbol+date -> keep first
+        sig_df_picks = sig_df.drop_duplicates(
+            subset=["SYMBOL", "SIGNAL_DATE"]).reset_index(drop=True)
         print(f"Unique signals  : {len(sig_df_picks):,}")
 
         columns  = get_picks_columns(mb)
@@ -983,7 +1029,6 @@ def main():
             row = build_picks_row(sig, sim, price_dict, mb, last_data_date)
             all_rows.append(row)
 
-            # Counters
             o = sim["order"]
             counts[o] = counts.get(o, 0) + 1
             if o == "Executed":
@@ -1001,7 +1046,7 @@ def main():
         write_picks_excel(all_rows, columns, out_path)
 
         print(f"\n✅ Picks sheet saved : {out_path}")
-        print(f"✅ Total signals     : {len(all_rows):,}  ({len(all_rows)} unique)")
+        print(f"✅ Total signals     : {len(all_rows):,}")
         print(f"   Executed          : {counts.get('Executed',0)}  "
               f"(Open={counts.get('Open',0)}  Closed={counts.get('Closed',0)})")
         print(f"   Pending           : {counts.get('Pending',0)}")
@@ -1011,9 +1056,9 @@ def main():
         print(f"   Loss trades       : {counts.get('Loss',0)}")
         return
 
-    # ════════════════════════════════════════════════════════════════════════
-    # FULL MODE → Aggregate 43-column stats (parameter sweep)
-    # ════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # FULL MODE -> Aggregate 43-column stats (parameter sweep)
+    # ══════════════════════════════════════════════════════════════════════════
     filter_cols   = ["DAYSBACK", "PCTMIN", "PCTMAX", "ATHMIN", "ATHMAX"]
     filter_groups = sig_df.groupby(filter_cols, dropna=False)
     total_expected = len(filter_groups) * len(trade_combos)
