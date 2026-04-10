@@ -1,0 +1,71 @@
+name: Quick Run (Daily Default Parameters)
+
+# ─── When to run ──────────────────────────────────────────────────────────────
+# Manual button: Actions → Quick Run → Run workflow
+# Scheduled:     Mon–Fri 1:15 PM UTC = 6:45 PM IST  (after bhav fetch at 6:15 PM)
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_db:
+        description: 'Rebuild DB from CSVs? (false = skip Steps 1-3, reuse existing db/)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+  schedule:
+    - cron: '45 13 * * 1-5'   # Mon–Fri 6:45 PM IST
+
+permissions:
+  contents: write
+
+jobs:
+  quick_run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pandas numpy pyarrow openpyxl
+
+      # ── Step 1: Consolidate CSVs (skip if db already built) ─────────────────
+      - name: Step 1 – Consolidate CSVs
+        if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
+        run: python src/01_consolidate_csv.py
+
+      # ── Step 2: Filter EQ ────────────────────────────────────────────────────
+      - name: Step 2 – Filter EQ Series
+        if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
+        run: python src/02_filter_eq.py
+
+      # ── Step 3: ATH ──────────────────────────────────────────────────────────
+      - name: Step 3 – Compute ATH
+        if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
+        run: python src/03_find_ath.py
+
+      # ── Step 4: Filter Signals (quick mode — single filter combo) ───────────
+      - name: Step 4 – Filter Signals (quick params)
+        run: python src/04_filter_signals.py --mode quick
+
+      # ── Step 5: Run Simulation (quick mode — single trade combo) ────────────
+      - name: Step 5 – Run Simulation (quick params)
+        run: python src/05_run_simulation.py --mode quick
+
+      # ── Commit outputs ───────────────────────────────────────────────────────
+      - name: Commit QuickRun output to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add db/ output/
+          git diff --cached --quiet || git commit -m "quick-run: $(date +'%d-%b-%Y %H:%M IST')"
+          git push
