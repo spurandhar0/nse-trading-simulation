@@ -4,45 +4,48 @@
 
   "signal_start_date": "2025-01-01",
   "signal_end_date":   "2025-12-31",
-
   "investment_per_buy":        10000,
-  "pending_window_days":       30,
-  "force_exit_calendar_days":  90,
+  "pending_window_days":          30,
+  "force_exit_calendar_days":     90,
   "max_rows_per_sheet":        25000,
 
   "_section_quick_run": "========== QUICK RUN (daily) ==========",
   "_quick_run_comment": "Single fixed parameter set. Change these values to update your default daily run.",
+  "_watch_symbols_comment": "Specific symbols to run. Empty list [] = ALL symbols. Example: ['TCS','WIPRO','INFY']",
   "quick_run": {
-    "days_back":      5,
-    "pct_min":       -0.10,
-    "pct_max":       -0.05,
-    "ath_min":       -0.60,
-    "ath_max":       -0.30,
-    "max_buys":       2,
-    "buy_drop":       0.05,
-    "target":         0.20,
-    "stoploss":       0.10,
-    "max_duration":   30
+    "watch_symbols": [],
+    "days_back":    5,
+    "pct_min":     -0.1,
+    "pct_max":     -0.05,
+    "ath_min":     -0.6,
+    "ath_max":     -0.3,
+    "max_buys":     2,
+    "buy_drop":     0.05,
+    "target":       0.2,
+    "stoploss":     0.1,
+    "max_duration": 30
   },
 
   "_section_param_sweep": "========== MONTHLY PARAMETER SWEEP ==========",
-  "_param_sweep_comment": "Arrays of values. Every combination is tested → 2000 rows output. MaxBuys(4) × BuyDrop(4) × Target(5) × Stoploss(5) × MaxDuration(5) = 2000 trade combos.",
+  "_param_sweep_comment": "Arrays of values. Every combination is tested. MaxBuys(4) × BuyDrop(4) × Target(5) × Stoploss(5) × MaxDuration(5) = 2000 trade combos.",
   "param_sweep": {
+    "_watch_symbols_comment": "Specific symbols to run for monthly sweep. Empty list [] = ALL symbols.",
+    "watch_symbols": [],
     "filter": {
-      "_comment": "Filter ranges. All combinations of days_back × pct pairs × ath pairs tested. Invalid combos (min>=max) auto-skipped.",
-      "days_back":  [5],
-      "pct_min":    [-0.10, -0.09, -0.08, -0.07, -0.06],
-      "pct_max":    [-0.05, -0.04, -0.03],
-      "ath_min":    [-0.60, -0.55, -0.50, -0.45, -0.40],
-      "ath_max":    [-0.40, -0.35, -0.30]
+      "_comment": "Filter ranges. All combinations tested. Invalid combos (min>=max) auto-skipped.",
+      "days_back": [5],
+      "pct_min":   [-0.1, -0.09, -0.08, -0.07, -0.06],
+      "pct_max":   [-0.05, -0.04, -0.03],
+      "ath_min":   [-0.6, -0.55, -0.5, -0.45, -0.4],
+      "ath_max":   [-0.4, -0.35, -0.3]
     },
     "trade": {
       "_comment": "Trade param ranges. All combos tested per filter combo.",
-      "max_buys":      [1, 2, 3, 4],
-      "buy_drop":      [0.05, 0.10, 0.15, 0.20],
-      "target":        [0.10, 0.15, 0.20, 0.25, 0.30],
-      "stoploss":      [0.05, 0.10, 0.15, 0.20, 0.25],
-      "max_duration":  [20, 30, 40, 50, 60]
+      "max_buys":     [1, 2, 3, 4],
+      "buy_drop":     [0.05, 0.1, 0.15, 0.2],
+      "target":       [0.1, 0.15, 0.2, 0.25, 0.3],
+      "stoploss":     [0.05, 0.1, 0.15, 0.2, 0.25],
+      "max_duration": [20, 30, 40, 50, 60]
     }
   }
 }
