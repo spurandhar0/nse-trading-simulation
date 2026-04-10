@@ -6,6 +6,13 @@ name: Quick Run (Daily Default Parameters)
 on:
   workflow_dispatch:
     inputs:
+      symbols:
+        description: >
+          Symbols to test — comma-separated (e.g. TCS,WIPRO,INFY).
+          Leave blank to use watch_symbols from config (or ALL if config is also blank).
+        required: false
+        default: ''
+        type: string
       rebuild_db:
         description: 'Rebuild DB from CSVs? (false = skip Steps 1-3, reuse existing db/)'
         required: false
@@ -53,13 +60,13 @@ jobs:
         if: ${{ github.event.inputs.rebuild_db == 'true' || github.event_name == 'schedule' }}
         run: python src/03_find_ath.py
 
-      # ── Step 4: Filter Signals (quick mode — single filter combo) ───────────
+      # ── Step 4: Filter Signals (quick mode) ──────────────────────────────────
       - name: Step 4 – Filter Signals (quick params)
-        run: python src/04_filter_signals.py --mode quick
+        run: python src/04_filter_signals.py --mode quick --symbols "${{ github.event.inputs.symbols }}"
 
-      # ── Step 5: Run Simulation (quick mode — single trade combo) ────────────
+      # ── Step 5: Run Simulation (quick mode) ──────────────────────────────────
       - name: Step 5 – Run Simulation (quick params)
-        run: python src/05_run_simulation.py --mode quick
+        run: python src/05_run_simulation.py --mode quick --symbols "${{ github.event.inputs.symbols }}"
 
       # ── Commit outputs ───────────────────────────────────────────────────────
       - name: Commit QuickRun output to repo
