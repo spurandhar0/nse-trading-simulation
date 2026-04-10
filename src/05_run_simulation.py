@@ -55,7 +55,6 @@ PICKS SHEET COLUMNS (quick mode — 50 columns for max_buys=2):
 """
 
 import os
-import concurrent.futures
 import sys
 import json
 import argparse
@@ -1215,26 +1214,16 @@ def main():
                 ordered_keys.append(sym)
             sym_signal_groups[sym].append(sig)
 
-        # ── Parallel simulation: one task per symbol group ────────────────────
-        n_workers = min(os.cpu_count() or 2, 4)
+        # ── Sequential simulation: one symbol group at a time ───────────────
         print(f"Simulating {len(sig_df_picks):,} signals across "
-              f"{len(sym_signal_groups):,} symbols "
-              f"({n_workers} workers)...")
-
-        work_items = [
-            (sym, sym_signal_groups[sym],
-             price_dict[sym] if sym in price_dict else None,
-             sim_params)
-            for sym in ordered_keys
-        ]
+              f"{len(sym_signal_groups):,} symbols...")
 
         sym_sim_results = {}  # sym -> [sim, sim, ...]
-        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-            for sym_key, results in zip(
-                ordered_keys,
-                executor.map(_simulate_sym_group, work_items)
-            ):
-                sym_sim_results[sym_key] = results
+        for sym in ordered_keys:
+            args = (sym, sym_signal_groups[sym],
+                    price_dict[sym] if sym in price_dict else None,
+                    sim_params)
+            sym_sim_results[sym] = _simulate_sym_group(args)
 
         # ── Assemble rows in original signal order ────────────────────────────
         sym_cursor = {sym: 0 for sym in ordered_keys}
