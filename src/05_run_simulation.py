@@ -431,7 +431,48 @@ def main():
     print(f"  Total signals : {len(sig_df):,}")
 
     if len(sig_df) == 0:
-        print("⚠️  No signals found. Check symbol names or run 04_filter_signals.py first.")
+        print("⚠️  No signals found. Saving diagnostic Excel instead of results.")
+        # ── Always create output file so the run is visible in output/ ─────────
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        ts_str_d  = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix_d  = "QuickRun" if mode == "quick" else "Results"
+        diag_path = os.path.join(OUTPUT_DIR, f"{prefix_d}_NoSignals_{ts_str_d}.xlsx")
+        wb_d = Workbook()
+        ws_d = wb_d.active
+        ws_d.title = "No_Signals"
+        navy = "00203864"; white = "00FFFFFF"
+        ws_d.append(["NSE Simulation — No Signals Found"])
+        ws_d.cell(1, 1).font = Font(bold=True, size=13, color=white)
+        ws_d.cell(1, 1).fill = PatternFill("solid", fgColor=navy)
+        ws_d.append([])
+        ws_d.append(["Field", "Value"])
+        for c in [ws_d.cell(3, 1), ws_d.cell(3, 2)]:
+            c.font = Font(bold=True, color=white)
+            c.fill = PatternFill("solid", fgColor=navy)
+        q_or_p = cfg.get("quick_run" if mode == "quick" else "param_sweep", {})
+        rows_d = [
+            ("Run mode",          mode_label),
+            ("Signal start date", cfg.get("signal_start_date", "?")),
+            ("Signal end date",   cfg.get("signal_end_date",   "?")),
+            ("Signals file",      signals_file),
+            ("ATH min filter",    q_or_p.get("ath_min", "?")),
+            ("ATH max filter",    q_or_p.get("ath_max", "?")),
+            ("Pct min (5d dip)",  q_or_p.get("pct_min", "?")),
+            ("Pct max (5d dip)",  q_or_p.get("pct_max", "?")),
+            ("Symbol filter",     ", ".join(sorted(symbol_filter)) if symbol_filter else "ALL"),
+            ("", ""),
+            ("Root Cause",        "ATH is computed from uploaded data only. With short data (< 1 year), ATH = recent high."),
+            ("",                  "Most stocks appear near their ATH and fail the -30% to -60% ATH distance filter."),
+            ("Solution",          "Upload 1-2 years of historical NSE bhav CSV files to bhav_data/ folder."),
+            ("",                  "Then re-run with rebuild_db=true to rebuild the database."),
+        ]
+        for r in rows_d:
+            ws_d.append(list(r))
+        ws_d.column_dimensions["A"].width = 22
+        ws_d.column_dimensions["B"].width = 80
+        wb_d.save(diag_path)
+        print(f"✅ Diagnostic file saved : {diag_path}")
+        print("ℹ️  Upload 1-2 years of historical bhav CSVs for real signals.")
         raise SystemExit(0)
 
     print("Loading EQ price data...")
