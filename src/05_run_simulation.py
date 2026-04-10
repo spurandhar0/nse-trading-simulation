@@ -55,6 +55,7 @@ PICKS SHEET COLUMNS (quick mode — 50 columns for max_buys=2):
 """
 
 import os
+import concurrent.futures
 import sys
 import json
 import argparse
@@ -155,15 +156,15 @@ def build_latest_market_data(eq_df):
     latest_idx = eq_df.groupby("SYMBOL")["DATE1"].idxmax()
     latest_df  = eq_df.loc[latest_idx].sort_values("SYMBOL").reset_index(drop=True)
     rows = []
-    for _, row in latest_df.iterrows():
+    for row in latest_df.itertuples(index=False):
         rows.append([
-            str(row["SYMBOL"]),
-            row["DATE1"].to_pydatetime().replace(tzinfo=None),
-            round(float(row["PREV_CLOSE"]),   2),
-            round(float(row["OPEN_PRICE"]),   2),
-            round(float(row["HIGH_PRICE"]),   2),
-            round(float(row["LOW_PRICE"]),    2),
-            round(float(row["CLOSE_PRICE"]),  2),
+            str(row.SYMBOL),
+            row.DATE1.to_pydatetime().replace(tzinfo=None),
+            round(float(row.PREV_CLOSE),  2),
+            round(float(row.OPEN_PRICE),  2),
+            round(float(row.HIGH_PRICE),  2),
+            round(float(row.LOW_PRICE),   2),
+            round(float(row.CLOSE_PRICE), 2),
         ])
     print(f"  Latest market data: {len(rows):,} symbols")
     return rows
@@ -175,27 +176,30 @@ def build_buy_history(eq_df, bought_ranges):
     bought_ranges: list of (symbol_str, start_pd_Timestamp, end_pd_Timestamp)
     Returns list of [SYMBOL, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE]
     Used for the Stock History tab in the HTML dashboard.
+    Performance: pre-groups eq_df by SYMBOL to avoid O(N×M) full-scan per trade.
     """
     if not bought_ranges:
         return []
     print(f"Extracting buy history for {len(bought_ranges):,} bought stocks...")
+    # Pre-group by SYMBOL once — O(N) instead of O(N×M) per trade
+    sym_groups = {sym: grp for sym, grp in eq_df.groupby("SYMBOL")}
     rows = []
     for sym, start_ts, end_ts in bought_ranges:
-        mask = (
-            (eq_df["SYMBOL"] == sym) &
-            (eq_df["DATE1"]  >= start_ts) &
-            (eq_df["DATE1"]  <= end_ts)
-        )
-        sub = eq_df[mask].sort_values("DATE1")
-        for _, row in sub.iterrows():
+        if sym not in sym_groups:
+            continue
+        grp = sym_groups[sym]
+        sub = grp[(grp["DATE1"] >= start_ts) & (grp["DATE1"] <= end_ts)]
+        if sub.empty:
+            continue
+        for row in sub.sort_values("DATE1").itertuples(index=False):
             rows.append([
-                str(row["SYMBOL"]),
-                row["DATE1"].to_pydatetime().replace(tzinfo=None),
-                round(float(row["PREV_CLOSE"]),  2),
-                round(float(row["OPEN_PRICE"]),  2),
-                round(float(row["HIGH_PRICE"]),  2),
-                round(float(row["LOW_PRICE"]),   2),
-                round(float(row["CLOSE_PRICE"]), 2),
+                sym,
+                row.DATE1.to_pydatetime().replace(tzinfo=None),
+                round(float(row.PREV_CLOSE),  2),
+                round(float(row.OPEN_PRICE),  2),
+                round(float(row.HIGH_PRICE),  2),
+                round(float(row.LOW_PRICE),   2),
+                round(float(row.CLOSE_PRICE), 2),
             ])
     print(f"  Buy history rows: {len(rows):,}")
     return rows
@@ -1045,6 +1049,44 @@ def save_no_signals_file(cfg, mode, mode_label, symbol_filter, signals_file, mon
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
+# ─── MODULE-LEVEL WORKER (must be at top level for ProcessPoolExecutor pickling) ──
+
+def _simulate_sym_group(args):
+    """
+    Simulate all signals for one symbol. Defined at module level so it is
+    picklable by ProcessPoolExecutor.
+    """
+    sym_key, sigs, sym_pd_data, params = args
+    if sym_pd_data is None:
+        # Symbol missing from price_dict — return invalid for each signal
+        invalid = {
+            "order": "Invalid", "status": None, "action": "Skip",
+            "buy_count": None, "avg_buy_price": None, "total_qty": None,
+            "total_investment": None, "target_price": None, "stop_price": None,
+            "first_buy_date": None, "exit_found": False,
+            "exit_date": None, "exit_price": None, "exit_type": None,
+            "profit": None, "gain_pct": None, "market_days": None,
+            "result_str": "Invalid: No market data found",
+            "duration_group": None, "buy_chance": None,
+            "sold_prev_close": None, "sold_open": None,
+            "sold_high": None, "sold_low": None, "sold_close": None,
+            "buys": [], "had_buy_chance": False,
+        }
+        return [invalid] * len(sigs)
+
+    _mb, _bd, _tgt, _sl, _mdur, _inv, _fecd, _pw, _gld = params
+    pd_local = {sym_key: sym_pd_data}
+    results = []
+    for s in sigs:
+        sim = simulate_trade_detailed(
+            sym_key, s.SIGNAL_DATE, float(s.SIGNAL_CLOSE), pd_local,
+            _mb, _bd, _tgt, _sl, _mdur, _inv, _fecd, _pw,
+            global_last_date=_gld,
+        )
+        results.append(sim)
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description="NSE Trading Simulation")
     parser.add_argument("--mode", choices=["quick", "full"], default="full",
@@ -1158,17 +1200,52 @@ def main():
         counts   = {"Executed": 0, "Pending": 0, "Expired": 0, "Invalid": 0,
                     "Open": 0, "Closed": 0, "Profit": 0, "Loss": 0}
 
-        for _, sig in sig_df_picks.iterrows():
-            sim = simulate_trade_detailed(
-                str(sig["SYMBOL"]),
-                sig["SIGNAL_DATE"],
-                float(sig["SIGNAL_CLOSE"]),
-                price_dict,
-                mb, bd, tgt, sl, mdur,
-                investment_per_buy, force_exit_calendar_days, pending_window_days,
-                global_last_date=last_data_date,
-            )
-            row = build_picks_row(sig, sim, price_dict, mb, last_data_date)
+        # ── Build ordered signal list using itertuples (faster than iterrows) ─
+        sim_params = (mb, bd, tgt, sl, mdur,
+                      investment_per_buy, force_exit_calendar_days,
+                      pending_window_days, last_data_date)
+
+        # Group signals by symbol to pass price_dict entry once per symbol (parallel)
+        sym_signal_groups = {}   # sym -> [(signal_date, signal_close, sig_tuple), ...]
+        ordered_keys = []        # preserve original signal order
+        for sig in sig_df_picks.itertuples(index=False):
+            sym = str(sig.SYMBOL)
+            if sym not in sym_signal_groups:
+                sym_signal_groups[sym] = []
+                ordered_keys.append(sym)
+            sym_signal_groups[sym].append(sig)
+
+        # ── Parallel simulation: one task per symbol group ────────────────────
+        n_workers = min(os.cpu_count() or 2, 4)
+        print(f"Simulating {len(sig_df_picks):,} signals across "
+              f"{len(sym_signal_groups):,} symbols "
+              f"({n_workers} workers)...")
+
+        work_items = [
+            (sym, sym_signal_groups[sym],
+             price_dict[sym] if sym in price_dict else None,
+             sim_params)
+            for sym in ordered_keys
+        ]
+
+        sym_sim_results = {}  # sym -> [sim, sim, ...]
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+            for sym_key, results in zip(
+                ordered_keys,
+                executor.map(_simulate_sym_group, work_items)
+            ):
+                sym_sim_results[sym_key] = results
+
+        # ── Assemble rows in original signal order ────────────────────────────
+        sym_cursor = {sym: 0 for sym in ordered_keys}
+        for sig in sig_df_picks.itertuples(index=False):
+            sym = str(sig.SYMBOL)
+            idx = sym_cursor[sym]
+            sim = sym_sim_results[sym][idx]
+            sym_cursor[sym] += 1
+
+            sig_dict = sig._asdict()   # namedtuple → dict for build_picks_row
+            row = build_picks_row(sig_dict, sim, price_dict, mb, last_data_date)
             all_rows.append(row)
 
             o = sim["order"]
@@ -1183,13 +1260,11 @@ def main():
 
                 # Track bought stocks for the BuyHistory sheet
                 if sim.get("first_buy_date") is not None:
-                    sym_str  = str(sig["SYMBOL"])
-                    # Start 7 days before signal to show context
-                    start_ts = pd.Timestamp(sig["SIGNAL_DATE"]) - pd.Timedelta(days=7)
+                    start_ts = pd.Timestamp(sig.SIGNAL_DATE) - pd.Timedelta(days=7)
                     end_ts   = (pd.Timestamp(sim["exit_date"])
                                 if sim.get("exit_date")
                                 else pd.Timestamp(last_data_date))
-                    bought_ranges.append((sym_str, start_ts, end_ts))
+                    bought_ranges.append((sym, start_ts, end_ts))
 
         # ── Extract market data BEFORE del eq_df ──────────────────────────────
         latest_mkt_data  = build_latest_market_data(eq_df) if eq_df is not None else []

@@ -972,8 +972,8 @@ function filteredCalls() {
     return filteredRows().filter(r => {
         const orderValue = String(r['Order'] || '').trim().toLowerCase();
         
-        // All "Invalid" rows = Fresh Calls (signal detected, no trade placed yet)
-        if (orderValue === 'invalid') return true;
+        // Only "Invalid: No market data found" = Fresh Call; other invalids excluded
+        if (orderValue === 'invalid') return String(r['Result']||'').includes('No market data found');
         
         // Always include "Pending" (these are open calls)
         if (orderValue === 'pending') return true;

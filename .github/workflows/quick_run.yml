@@ -36,6 +36,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # ── Cache pip packages ───────────────────────────────────────────────────
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-pandas-openpyxl-pyarrow
+          restore-keys: pip-${{ runner.os }}-
+
       - name: Install dependencies
         run: pip install pandas openpyxl pyarrow
 
@@ -45,16 +53,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: db/
-          key: db-${{ hashFiles('bhav_data/**') }}
-          restore-keys: db-
+          key: db-quick-${{ hashFiles('bhav_data/**') }}
+          restore-keys: db-quick-
 
       # ── Determine rebuild_db ─────────────────────────────────────────────────
       - name: Set rebuild flag
         id: flags
         run: |
-          # Scheduled run always rebuilds; manual run uses input value
+          # Scheduled run: only rebuild if cache was NOT hit (new bhav file downloaded)
+          # Manual run: use the input value
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "rebuild=true" >> $GITHUB_OUTPUT
+            if [ "${{ steps.cache-db.outputs.cache-hit }}" != "true" ]; then
+              echo "rebuild=true" >> $GITHUB_OUTPUT
+            else
+              echo "rebuild=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "rebuild=${{ github.event.inputs.rebuild_db || 'false' }}" >> $GITHUB_OUTPUT
           fi
@@ -72,17 +85,26 @@ jobs:
         if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
         run: python src/03_find_ath.py
 
-      - name: Step 4 — Filter Signals
+      - name: Step 4 — Filter Signals (QUICK mode — single param set)
         if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
-        run: python src/04_filter_signals.py
+        run: |
+          SYMS="${{ github.event.inputs.symbols || '' }}"
+          if [ -n "$SYMS" ]; then
+            python src/04_filter_signals.py --mode quick --symbols "$SYMS"
+          else
+            python src/04_filter_signals.py --mode quick
+          fi
 
       # ── Step 5: Run simulation ───────────────────────────────────────────────
       - name: Step 5 — Run Quick Simulation
         id: sim
-        env:
-          SIM_MODE: quick
-          SIM_SYMBOLS: ${{ github.event.inputs.symbols || '' }}
-        run: python src/05_run_simulation.py
+        run: |
+          SYMS="${{ github.event.inputs.symbols || '' }}"
+          if [ -n "$SYMS" ]; then
+            python src/05_run_simulation.py --mode quick --symbols "$SYMS"
+          else
+            python src/05_run_simulation.py --mode quick
+          fi
 
       # ── Upload dated output as artifact ─────────────────────────────────────
       - name: Upload output artifacts
