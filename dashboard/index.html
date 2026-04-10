@@ -848,6 +848,7 @@ const els={file:document.getElementById('file'),fileInfo:document.getElementById
 function parseNum(v){if(!v)return 0;const n=parseFloat(String(v).replace(/,/g,''));return isNaN(n)?0:n}
 function fmtCur(v){return '₹'+parseNum(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function fmtPct(v){return parseNum(v).toFixed(2)+'%'}
+function fmtFracPct(v){return (parseNum(v)*100).toFixed(2)+'%'}
 function colorCls(x){const n=parseNum(x);return n>0?'green':(n<0?'red':'')}
 function setLoading(show,text='Loading…'){if(show){els.loading.classList.remove('hidden');els.loadingText.textContent=text}else els.loading.classList.add('hidden')}
 function pad2(n){return String(n).padStart(2,'0')}
@@ -1025,7 +1026,7 @@ function processExcelData(uint8Data, sourceLabel) {
         wb.SheetNames.forEach((sheetName, index) => {
             if(sheetName.toLowerCase() === 'pickse' || index === 0) return;
             const histSheet = wb.Sheets[sheetName];
-            const histRows = XLSX.utils.sheet_to_json(histSheet, {raw:false, defval:''});
+            const histRows = XLSX.utils.sheet_to_json(histSheet, {raw:false, dateNF:'yyyy-mm-dd', defval:''});
             console.log(`📅 Loading ${sheetName}: ${histRows.length} rows`);
             histRows.forEach(row => {
                 let symbol=null,dateVal=null,prevClose=null,openPrice=null,highPrice=null,lowPrice=null,closePrice=null;
@@ -1166,7 +1167,7 @@ function pnlRowExcel(r){
 
 function pnlPctRowExcel(r){
     const excelPct=r['GainLoss%'];
-    if(excelPct!==null&&excelPct!==undefined&&String(excelPct).trim()!=='')return parseNum(excelPct);
+    if(excelPct!==null&&excelPct!==undefined&&String(excelPct).trim()!=='')return parseNum(excelPct)*100;
     const entry=parseNum(r['AvgBuyPrice'])||parseNum(r['BuyClPrice']);
     if(entry<=0)return 0;
     if(isClosed(r)){
@@ -1193,9 +1194,11 @@ function renderPager(el,key,total,pages,page){
     el.innerHTML=`<span class="info">${total} rows | Page ${page}/${pages}</span><button onclick="pagerPrev('${key}')">Prev</button><button onclick="pagerNext('${key}', ${pages})">Next</button><select onchange="pagerSize('${key}', this.value)"><option value="50" ${pageState[key].size==50?'selected':''}>50</option><option value="100" ${pageState[key].size==100?'selected':''}>100</option><option value="200" ${pageState[key].size==200?'selected':''}>200</option><option value="500" ${pageState[key].size==500?'selected':''}>500</option></select>`
 }
 
-function pagerPrev(key){pageState[key].page=Math.max(1,pageState[key].page-1);renderAllTablesOnly()}
-function pagerNext(key,pages){pageState[key].page=Math.min(pages,pageState[key].page+1);renderAllTablesOnly()}
-function pagerSize(key,val){pageState[key].size=parseInt(val,10)||100;pageState[key].page=1;renderAllTablesOnly()}
+const TAB_RENDER_MAP={calls:()=>renderCalls(),ledger:()=>renderLedger(),holding:()=>renderHolding(),closed:()=>renderClosed(),avgTrigger:()=>renderAvgBuyTrigger(),sellTrigger:()=>renderSellTrigger(),avgHistory:()=>renderAvgHistory(),forceExit:()=>renderForceExit()};
+function pagerRenderKey(key){if(TAB_RENDER_MAP[key])TAB_RENDER_MAP[key]();else renderAllTablesOnly();}
+function pagerPrev(key){pageState[key].page=Math.max(1,pageState[key].page-1);pagerRenderKey(key);}
+function pagerNext(key,pages){pageState[key].page=Math.min(pages,pageState[key].page+1);pagerRenderKey(key);}
+function pagerSize(key,val){pageState[key].size=parseInt(val,10)||100;pageState[key].page=1;pagerRenderKey(key);}
 
 /* PART 6: TRADE HISTORY RENDERING (FIXED) */
 
@@ -1482,7 +1485,7 @@ function renderCalls(){
         const isFresh=orderStatus==='invalid';
         const statusBtnClass=isFresh?'fresh-call':'open-call';
         const statusText=isFresh?'Fresh Call':'Open Call';
-        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
+        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtFracPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtFracPct(r['5DLow%'])</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
     }
     html+='</tbody></table>';
     els.callsTable.innerHTML=html
@@ -2173,7 +2176,7 @@ function renderAllTablesOnly(){
     renderHolding();
     renderClosed();
     renderDailyLedger();
-    renderTradeHistory();
+    if(!document.getElementById('tradeHistory').classList.contains('hidden')) renderTradeHistory();
     renderAvgBuyTrigger();
     renderSellTrigger();
     renderAvgHistory();
@@ -2221,12 +2224,16 @@ async function exportImage(){
         return;
     }
 
-    // Standard Table Logic: Fixed Size Pagination
+    // Standard Table Logic: Export ALL rows regardless of pagination
+    // Temporarily expand to show all rows, capture, then restore
+    const activeTabKey = document.querySelector('.tab.active')?.dataset?.tab;
+    const pagerKey = {calls:'calls',ledger:'ledger',holding:'holding',closed:'closed',avgTrigger:'avgTrigger',sellTrigger:'sellTrigger',avgHistory:'avgHistory',forceExit:'forceExit'}[activeTabKey];
+    let savedSize=null, savedPage=null;
+    if(pagerKey && pageState[pagerKey]){savedSize=pageState[pagerKey].size;savedPage=pageState[pagerKey].page;pageState[pagerKey].size=99999;pageState[pagerKey].page=1;if(TAB_RENDER_MAP[pagerKey])TAB_RENDER_MAP[pagerKey]();}
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     const badgesHTML = tabEl.querySelector('.badges') ? tabEl.querySelector('.badges').outerHTML : '';
     const theadHTML = table.querySelector('thead').outerHTML;
     
-    // Remove scroll for accurate row reading if needed, though clone is safer
     const totalPages = Math.ceil(rows.length / EXPORT_CONFIG.rowsPerPage);
 
     setLoading(true, `Generating ${totalPages} images...`);
@@ -2304,6 +2311,7 @@ async function exportImage(){
         console.error(e);
         showToast('Image export failed', 'error');
     } finally {
+        if(savedSize!==null&&pagerKey&&pageState[pagerKey]){pageState[pagerKey].size=savedSize;pageState[pagerKey].page=savedPage;if(TAB_RENDER_MAP[pagerKey])TAB_RENDER_MAP[pagerKey]();}
         setLoading(false);
     }
 }
@@ -2333,7 +2341,11 @@ async function exportPDF(){
         return;
     }
 
-    // Standard Table Logic: Page Breaks every 10 rows
+    // Standard Table Logic: Export ALL rows regardless of pagination
+    const exportTabKey = document.querySelector('.tab.active')?.dataset?.tab;
+    const exportPagerKey = {calls:'calls',ledger:'ledger',holding:'holding',closed:'closed',avgTrigger:'avgTrigger',sellTrigger:'sellTrigger',avgHistory:'avgHistory',forceExit:'forceExit'}[exportTabKey];
+    let pdfSavedSize=null, pdfSavedPage=null;
+    if(exportPagerKey && pageState[exportPagerKey]){pdfSavedSize=pageState[exportPagerKey].size;pdfSavedPage=pageState[exportPagerKey].page;pageState[exportPagerKey].size=99999;pageState[exportPagerKey].page=1;if(TAB_RENDER_MAP[exportPagerKey])TAB_RENDER_MAP[exportPagerKey]();}
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     const badgesHTML = tabEl.querySelector('.badges') ? tabEl.querySelector('.badges').outerHTML : '';
     const theadHTML = table.querySelector('thead').outerHTML;
@@ -2354,6 +2366,7 @@ async function exportPDF(){
             const slice = rows.slice(p * EXPORT_CONFIG.rowsPerPage, (p + 1) * EXPORT_CONFIG.rowsPerPage);
 
             const pageDiv = document.createElement('div');
+            pageDiv.className = 'pdf-page';
             // A4 Dimensions approx 297mm height. Padding 15mm on top/bottom = 267mm content area.
             pageDiv.style.width = '210mm';
             // We don't set fixed height here so content can flow, but we split manually.
@@ -2384,7 +2397,7 @@ async function exportPDF(){
             image: { type: 'jpeg', quality: 0.98 },
             html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            pagebreak: { mode: 'css', before: '.pdf-page' } // Respect manual breaks
+            pagebreak: { mode: ['legacy', 'css', 'avoid-all'] } // Respect page-break-after on .pdf-page
         };
 
         await html2pdf().set(opt).from(wrapper).save();
@@ -2395,6 +2408,7 @@ async function exportPDF(){
         showToast('PDF export failed', 'error');
     } finally {
         if(document.body.contains(wrapper)) document.body.removeChild(wrapper);
+        if(pdfSavedSize!==null&&exportPagerKey&&pageState[exportPagerKey]){pageState[exportPagerKey].size=pdfSavedSize;pageState[exportPagerKey].page=pdfSavedPage;if(TAB_RENDER_MAP[exportPagerKey])TAB_RENDER_MAP[exportPagerKey]();}
         setLoading(false);
     }
 }
