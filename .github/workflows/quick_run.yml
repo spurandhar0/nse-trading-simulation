@@ -1,108 +1,128 @@
-name: Quick Run (Daily Picks Sheet)
+name: Quick Run — Daily BTST Signals
 
-# ─── When to run ──────────────────────────────────────────────────────────────
-# 1. Scheduled: Mon–Fri 6:45 PM IST (13:15 UTC) — always rebuilds DB
-# 2. Manual:    workflow_dispatch — user picks symbols + rebuild toggle
 on:
   schedule:
-    - cron: "15 13 * * 1-5"   # 6:45 PM IST (UTC+5:30)
+    - cron: '15 13 * * 1-5'   # 6:45 PM IST Mon–Fri
   workflow_dispatch:
     inputs:
       symbols:
-        description: >
-          Symbols to run — comma-separated (e.g. TCS,WIPRO,INFY).
-          Leave blank to use watch_symbols from config (or ALL if config is also blank).
+        description: 'Comma-separated symbols (blank = all from config)'
         required: false
         default: ''
-        type: string
       rebuild_db:
-        description: 'Rebuild DB from bhav CSVs (true = fresh build; false = use cached DB)'
+        description: 'Rebuild DB from bhav CSVs?'
         required: false
-        default: 'true'
+        default: 'false'
         type: choice
         options: ['true', 'false']
 
-permissions:
-  contents: write
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   quick-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: write   # needed to push gh-pages branch
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0    # full history needed for gh-pages push
 
-      # ── Cache db/ parquet files between runs ────────────────────────────────
-      # Cache key: hash of all bhav CSV files — invalidates when new CSVs added
-      # This lets rebuild_db=false work on manual re-runs without re-processing
-      - name: Restore db/ cache
-        id: db-cache
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl pyarrow
+
+      # ── Cache db/ (parquet files) keyed by bhav_data hash ───────────────────
+      - name: Cache db/ parquet files
+        id: cache-db
         uses: actions/cache@v4
         with:
           path: db/
-          key: db-${{ runner.os }}-${{ hashFiles('bhav_data/**') }}
-          restore-keys: |
-            db-${{ runner.os }}-
+          key: db-${{ hashFiles('bhav_data/**') }}
+          restore-keys: db-
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
+      # ── Determine rebuild_db ─────────────────────────────────────────────────
+      - name: Set rebuild flag
+        id: flags
+        run: |
+          # Scheduled run always rebuilds; manual run uses input value
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "rebuild=true" >> $GITHUB_OUTPUT
+          else
+            echo "rebuild=${{ github.event.inputs.rebuild_db || 'false' }}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Install dependencies
-        run: pip install pandas numpy pyarrow openpyxl
-
-      # ── Step 1: Consolidate CSVs ─────────────────────────────────────────────
-      # Runs when:  (a) schedule  (b) user sets rebuild_db=true
-      #             (c) cache miss (db not available for this bhav_data state)
-      - name: Step 1 – Consolidate bhav CSVs to DB
-        if: >-
-          ${{
-            github.event_name == 'schedule' ||
-            github.event.inputs.rebuild_db == 'true' ||
-            steps.db-cache.outputs.cache-hit != 'true'
-          }}
+      # ── Steps 1-4: Build DB (only when rebuild=true or cache miss) ──────────
+      - name: Step 1 — Consolidate CSVs
+        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
         run: python src/01_consolidate_csv.py
 
-      # ── Step 2: Filter EQ ────────────────────────────────────────────────────
-      - name: Step 2 – Filter EQ Series
-        if: >-
-          ${{
-            github.event_name == 'schedule' ||
-            github.event.inputs.rebuild_db == 'true' ||
-            steps.db-cache.outputs.cache-hit != 'true'
-          }}
+      - name: Step 2 — Filter EQ series
+        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
         run: python src/02_filter_eq.py
 
-      # ── Step 3: ATH ──────────────────────────────────────────────────────────
-      - name: Step 3 – Compute ATH per symbol
-        if: >-
-          ${{
-            github.event_name == 'schedule' ||
-            github.event.inputs.rebuild_db == 'true' ||
-            steps.db-cache.outputs.cache-hit != 'true'
-          }}
+      - name: Step 3 — Find ATH
+        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
         run: python src/03_find_ath.py
 
-      # ── Step 4: Filter Signals (quick mode — fixed filter params) ────────────
-      - name: Step 4 – Filter Signals
-        run: python src/04_filter_signals.py --mode quick --symbols "${{ github.event.inputs.symbols }}"
+      - name: Step 4 — Filter Signals
+        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
+        run: python src/04_filter_signals.py
 
-      # ── Step 5: Run Quick Simulation → Picks Sheet ───────────────────────────
-      - name: Step 5 – Run Quick Picks Simulation
-        run: python src/05_run_simulation.py --mode quick --symbols "${{ github.event.inputs.symbols }}"
+      # ── Step 5: Run simulation ───────────────────────────────────────────────
+      - name: Step 5 — Run Quick Simulation
+        id: sim
+        env:
+          SIM_MODE: quick
+          SIM_SYMBOLS: ${{ github.event.inputs.symbols || '' }}
+        run: python src/05_run_simulation.py
 
-      # ── Commit output to repo ─────────────────────────────────────────────────
-      - name: Commit output to repo
+      # ── Upload dated output as artifact ─────────────────────────────────────
+      - name: Upload output artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickrun-output-${{ github.run_number }}
+          path: output/
+
+      # ── Deploy dashboard to gh-pages branch ─────────────────────────────────
+      - name: Deploy dashboard to GitHub Pages
+        if: steps.sim.outcome == 'success'
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/
-          git diff --cached --quiet || git commit -m "quick-run: $(date +'%d-%b-%Y %H:%M')"
-          git push
+          # Configure git
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create a clean deploy directory
+          mkdir -p /tmp/deploy
+
+          # Copy dashboard HTML (as index.html)
+          cp dashboard/index.html /tmp/deploy/index.html
+
+          # Copy the latest quickrun Excel (auto-fetched by the dashboard)
+          if [ -f output/latest_quickrun.xlsx ]; then
+            cp output/latest_quickrun.xlsx /tmp/deploy/latest_quickrun.xlsx
+            echo "✅ Copied latest_quickrun.xlsx"
+          else
+            echo "⚠️ latest_quickrun.xlsx not found — dashboard will show load error"
+          fi
+
+          # Write a simple metadata file
+          echo "{\"last_run\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\"run_number\":${{ github.run_number }}}" > /tmp/deploy/meta.json
+
+          # Push to gh-pages branch (force-replace entire branch content)
+          cd /tmp/deploy
+          git init -b gh-pages
+          git add .
+          git commit -m "Deploy dashboard — Run #${{ github.run_number }} $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push --force \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            HEAD:gh-pages
+          echo "✅ Dashboard deployed to gh-pages"
