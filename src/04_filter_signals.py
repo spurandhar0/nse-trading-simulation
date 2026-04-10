@@ -126,10 +126,41 @@ def filter_symbol(sym_df, ath_price, days_back, pct_min, pct_max,
 
     return results
 
+def resolve_symbols(cli_symbols_str, cfg, mode):
+    """
+    Priority order:
+      1. --symbols CLI arg (comma-separated string)  ← highest priority
+      2. watch_symbols in config (quick_run or param_sweep section)
+      3. Empty list → run ALL symbols
+    Returns a set of uppercase symbol strings, or empty set (= all).
+    """
+    # 1. CLI arg
+    if cli_symbols_str and cli_symbols_str.strip():
+        syms = [s.strip().upper() for s in cli_symbols_str.split(",") if s.strip()]
+        if syms:
+            print(f"Symbol filter   : CLI override → {syms}")
+            return set(syms)
+
+    # 2. Config watch_symbols
+    section = cfg.get("quick_run" if mode == "quick" else "param_sweep", {})
+    config_syms = section.get("watch_symbols", [])
+    if config_syms:
+        syms = [s.strip().upper() for s in config_syms if s.strip()]
+        if syms:
+            print(f"Symbol filter   : config watch_symbols → {syms}")
+            return set(syms)
+
+    # 3. All symbols
+    print("Symbol filter   : ALL symbols")
+    return set()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Filter NSE trading signals")
     parser.add_argument("--mode", choices=["quick", "full"], default="full",
                         help="quick = single param set; full = all param sweep combos")
+    parser.add_argument("--symbols", default="",
+                        help="Comma-separated symbols to test, e.g. TCS,WIPRO,INFY (empty = all)")
     args = parser.parse_args()
     mode = args.mode
 
@@ -147,10 +178,23 @@ def main():
     print(f"Mode            : {mode.upper()}")
     print(f"Filter combos   : {len(filter_combos)}")
 
+    # Resolve symbol filter (CLI > config > all)
+    symbol_filter = resolve_symbols(args.symbols, cfg, mode)
+
     print("Loading EQ data...")
     eq = pd.read_parquet(EQ_FILE, columns=["SYMBOL", "DATE1", "CLOSE_PRICE"])
     eq["DATE1"] = pd.to_datetime(eq["DATE1"])
     eq.sort_values(["SYMBOL", "DATE1"], inplace=True)
+
+    # Apply symbol filter if specified
+    if symbol_filter:
+        eq = eq[eq["SYMBOL"].isin(symbol_filter)]
+        missing = symbol_filter - set(eq["SYMBOL"].unique())
+        if missing:
+            print(f"⚠️  Symbols not found in data: {sorted(missing)}")
+        if eq.empty:
+            print("❌ No data found for specified symbols. Check symbol names (must match NSE exact name).")
+            raise SystemExit(1)
 
     print("Loading ATH data...")
     ath_df  = pd.read_parquet(ATH_FILE, columns=["SYMBOL", "ATH_PRICE"])
