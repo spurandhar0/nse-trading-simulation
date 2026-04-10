@@ -379,6 +379,8 @@ def main():
     parser = argparse.ArgumentParser(description="NSE Trading Simulation")
     parser.add_argument("--mode", choices=["quick", "full"], default="full",
                         help="quick = 1 param combo (daily); full = all combos (monthly)")
+    parser.add_argument("--symbols", default="",
+                        help="Comma-separated symbols to simulate, e.g. TCS,WIPRO,INFY (empty = all)")
     args = parser.parse_args()
     mode = args.mode
 
@@ -400,18 +402,44 @@ def main():
     print(f"Mode            : {mode_label}")
     print(f"Trade combos    : {len(trade_combos):,}")
 
+    # ── Resolve symbol filter (CLI > config > all) ─────────────────────────────
+    symbol_filter = set()
+    cli_syms = args.symbols.strip()
+    if cli_syms:
+        symbol_filter = {s.strip().upper() for s in cli_syms.split(",") if s.strip()}
+        print(f"Symbol filter   : CLI override → {sorted(symbol_filter)}")
+    else:
+        section = cfg.get("quick_run" if mode == "quick" else "param_sweep", {})
+        config_syms = section.get("watch_symbols", [])
+        if config_syms:
+            symbol_filter = {s.strip().upper() for s in config_syms if s.strip()}
+            print(f"Symbol filter   : config watch_symbols → {sorted(symbol_filter)}")
+        else:
+            print("Symbol filter   : ALL symbols")
+
     print("Loading signals...")
     sig_df = pd.read_parquet(signals_file)
     sig_df["SIGNAL_DATE"] = pd.to_datetime(sig_df["SIGNAL_DATE"])
+
+    # Apply symbol filter to signals
+    if symbol_filter:
+        sig_df = sig_df[sig_df["SYMBOL"].isin(symbol_filter)]
+        missing = symbol_filter - set(sig_df["SYMBOL"].unique())
+        if missing:
+            print(f"⚠️  Symbols not in signals (no trades triggered): {sorted(missing)}")
+
     print(f"  Total signals : {len(sig_df):,}")
 
     if len(sig_df) == 0:
-        print("⚠️  No signals found. Run 04_filter_signals.py first.")
+        print("⚠️  No signals found. Check symbol names or run 04_filter_signals.py first.")
         raise SystemExit(0)
 
     print("Loading EQ price data...")
     eq_df          = pd.read_parquet(EQ_FILE)
     eq_df["DATE1"] = pd.to_datetime(eq_df["DATE1"])
+    # Filter EQ price dict to only needed symbols (saves memory)
+    if symbol_filter:
+        eq_df = eq_df[eq_df["SYMBOL"].isin(symbol_filter)]
     price_dict     = build_price_dict(eq_df)
     del eq_df
 
