@@ -217,7 +217,8 @@ def duration_group(market_days):
 def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
                              max_buys, buy_drop, target_pct, stoploss_pct,
                              max_duration, investment_per_buy,
-                             force_exit_calendar_days, pending_window_days):
+                             force_exit_calendar_days, pending_window_days,
+                             global_last_date=None):
     """
     Simulate one trade and return all per-trade details for the picks sheet.
 
@@ -298,8 +299,11 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     buys             = []
     had_buy_chance   = False
 
-    # ── Main loop — D+1 through D+(N-2); last data point excluded ────────────
-    for i in range(start_idx + 1, last_idx):
+    # ── Main loop — D+1 through last available date (inclusive) ─────────────
+    # BUG FIX: was range(start_idx+1, last_idx) — excluded the final data point.
+    # That caused buy/exit triggers on the last day to be missed (e.g. RecentLTP
+    # already below BuyClPrice yet Status=Pending).  Now includes every day.
+    for i in range(start_idx + 1, len(dates)):
         curr_ts  = pd.Timestamp(dates[i])
         low_px   = float(lows[i])
         high_px  = float(highs[i])
@@ -393,8 +397,12 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
 
     # ── Determine order / status / action ─────────────────────────────────────
     if buy_count == 0:
-        last_ts   = pd.Timestamp(dates[last_idx])
-        days_from = (last_ts - sig_ts).days
+        # BUG FIX: was using symbol's own last date (dates[last_idx]).
+        # If a stock was delisted/suspended after just a few days, its last date
+        # was only days after signal → wrongly showed as Pending for months.
+        # Fix: always use the GLOBAL last data date for the Pending/Expired decision.
+        ref_ts    = pd.Timestamp(global_last_date) if global_last_date else pd.Timestamp(dates[last_idx])
+        days_from = (ref_ts - sig_ts).days
         if days_from <= pending_window_days:
             order = "Pending"
             action = "Buy"
@@ -480,7 +488,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
 def simulate_trade(sym, signal_date, signal_close, price_dict,
                    max_buys, buy_drop, target_pct, stoploss_pct,
                    max_duration, investment_per_buy,
-                   force_exit_calendar_days, pending_window_days):
+                   force_exit_calendar_days, pending_window_days,
+                   global_last_date=None):
     """Lightweight simulation for full-mode parameter sweep aggregate stats."""
     if sym not in price_dict:
         return {"order": "Invalid"}
@@ -523,7 +532,7 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     exit_price       = 0.0
     exit_date        = None
 
-    for i in range(start_idx + 1, last_idx):
+    for i in range(start_idx + 1, len(dates)):   # BUG FIX: include last data point
         curr_ts  = pd.Timestamp(dates[i])
         low_px   = float(lows[i])
         high_px  = float(highs[i])
@@ -571,8 +580,9 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
                     target_price      = round(avg_buy_price * (1 + target_pct), 2)
 
     if buy_count == 0:
-        last_ts   = pd.Timestamp(dates[last_idx])
-        days_from = (last_ts - sig_ts).days
+        # BUG FIX: use global last date (not symbol's last date) for Pending/Expired
+        ref_ts    = pd.Timestamp(global_last_date) if global_last_date else pd.Timestamp(dates[last_idx])
+        days_from = (ref_ts - sig_ts).days
         order = "Pending" if days_from <= pending_window_days else "Expired"
         return {"order": order, "status": order, "profit": 0, "gain_pct": 0,
                 "exit_type": None, "result": None, "market_days": 0}
@@ -1155,7 +1165,8 @@ def main():
                 float(sig["SIGNAL_CLOSE"]),
                 price_dict,
                 mb, bd, tgt, sl, mdur,
-                investment_per_buy, force_exit_calendar_days, pending_window_days
+                investment_per_buy, force_exit_calendar_days, pending_window_days,
+                global_last_date=last_data_date,
             )
             row = build_picks_row(sig, sim, price_dict, mb, last_data_date)
             all_rows.append(row)
@@ -1248,7 +1259,8 @@ def main():
                 simulate_trade(
                     sym, sig_date, sig_close, price_dict,
                     mb, bd_p, tgt, sl, mdur,
-                    investment_per_buy, force_exit_calendar_days, pending_window_days
+                    investment_per_buy, force_exit_calendar_days, pending_window_days,
+                    global_last_date=last_data_date,
                 )
                 for sym, sig_date, sig_close in signal_list
             ]
