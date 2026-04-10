@@ -231,6 +231,40 @@ def main():
 
     if not all_signals:
         print("⚠️  No signals found. Check your filter parameters and data date range.")
+        print()
+        print("📊 DIAGNOSTIC — ATH vs Latest Price:")
+        print(f"   Data range     : {eq['DATE1'].min().date()} → {eq['DATE1'].max().date()}")
+        print(f"   Signal range   : {start_date.date()} → {end_date.date()}")
+        if filter_combos:
+            fc = filter_combos[0]
+            print(f"   5-day dip      : pct_min={fc[1]:.0%}  pct_max={fc[2]:.0%}")
+            print(f"   ATH distance   : ath_min={fc[3]:.0%}  ath_max={fc[4]:.0%}")
+        print()
+        print("   ⚠️  ATH is computed from your uploaded data only.")
+        print("   ⚠️  With only short-term data (e.g. 1 month), ATH = recent high.")
+        print("   ⚠️  Most stocks appear near ATH and fail the -30% to -60% ATH filter.")
+        print("   ⚠️  SOLUTION: Upload 1-2 years of historical bhav CSVs to bhav_data/")
+        print()
+        print("   Symbol breakdown (first 30):")
+        shown = 0
+        for sym in eq["SYMBOL"].unique():
+            if shown >= 30:
+                break
+            ath_price = ath_map.get(sym, 0)
+            if ath_price <= 0:
+                continue
+            sym_rows = eq[eq["SYMBOL"] == sym]
+            if len(sym_rows) == 0:
+                continue
+            latest_close = float(sym_rows.iloc[-1]["CLOSE_PRICE"])
+            pct_from_ath  = (latest_close - ath_price) / ath_price
+            if filter_combos:
+                fc   = filter_combos[0]
+                flag = "✅ ATH OK" if fc[3] <= pct_from_ath <= fc[4] else f"❌ ATH={pct_from_ath:+.1%} (need {fc[3]:.0%} to {fc[4]:.0%})"
+            else:
+                flag = f"pct_from_ath={pct_from_ath:+.1%}"
+            print(f"   {sym:15s}: close={latest_close:8.2f}  ATH={ath_price:8.2f}  {flag}")
+            shown += 1
         pd.DataFrame(columns=EMPTY_COLS).to_parquet(output_file, index=False)
         raise SystemExit(0)
 
