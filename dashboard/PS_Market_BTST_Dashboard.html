@@ -71,6 +71,9 @@ header{background:linear-gradient(135deg,#0a1628 0%,#0d1f3c 50%,#162847 100%);pa
 .stat-card:hover{transform:translateY(-2px);}
 .stat-val{font-size:25px;font-weight:900;color:var(--blue2);line-height:1.1;}
 .stat-lbl{font-size:10.5px;color:var(--text3);font-weight:600;margin-top:4px;text-transform:uppercase;letter-spacing:.4px;}
+.stat{background:linear-gradient(135deg,#f8faff,#eef2ff);border:1.5px solid #c7d7fe;border-radius:var(--radius);padding:10px 14px;text-align:center;min-width:100px;}
+.stat .label{font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;}
+.stat .value{font-size:18px;font-weight:900;color:var(--blue2);}
 .stat-card.gc{background:linear-gradient(135deg,#f0fdf4,#dcfce7);border-color:#86efac;}.stat-card.gc .stat-val{color:var(--green);}
 .stat-card.rc{background:linear-gradient(135deg,#fff1f2,#ffe4e6);border-color:#fca5a5;}.stat-card.rc .stat-val{color:var(--red);}
 .stat-card.ac{background:linear-gradient(135deg,#fffbeb,#fef3c7);border-color:#fcd34d;}.stat-card.ac .stat-val{color:var(--amber);}
@@ -310,16 +313,26 @@ footer span{color:rgba(255,255,255,.85);font-weight:700;}
 <div id="performance" class="card hidden">
   <div id="perfHeader" style="margin-bottom:18px;">
     <h3 style="margin:0 0 14px;color:var(--navy);font-size:16px;font-weight:800;">Performance Analytics</h3>
+
+    <!-- Combined overview stat -->
+    <div id="perfStatsOverview" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px;"></div>
+
     <div style="display:flex;gap:18px;flex-wrap:wrap;">
-      <div style="flex:1;min-width:260px;">
-        <div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:7px;text-transform:uppercase;letter-spacing:.4px;">Result Breakdown</div>
-        <div style="height:210px;"><canvas id="closedChart"></canvas></div>
+      <!-- Closed trades column -->
+      <div style="flex:1;min-width:280px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px;">Closed Trades</div>
+        <div id="closedPerfStats" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;"></div>
+        <div style="height:200px;"><canvas id="closedChart"></canvas></div>
         <div id="closedChartLabels" style="margin-top:7px;display:flex;flex-wrap:wrap;gap:5px;font-size:11px;"></div>
+        <div style="height:180px;margin-top:12px;"><canvas id="closedWinLossChart"></canvas></div>
       </div>
-      <div style="flex:1;min-width:260px;">
-        <div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:7px;text-transform:uppercase;letter-spacing:.4px;">Duration Buckets</div>
-        <div style="height:210px;"><canvas id="holdChart"></canvas></div>
+      <!-- Holding trades column -->
+      <div style="flex:1;min-width:280px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px;">Holding Trades</div>
+        <div id="holdPerfStats" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;"></div>
+        <div style="height:200px;"><canvas id="holdChart"></canvas></div>
         <div id="holdChartLabels" style="margin-top:7px;display:flex;flex-wrap:wrap;gap:5px;font-size:11px;"></div>
+        <div style="height:180px;margin-top:12px;"><canvas id="holdWinLossChart"></canvas></div>
       </div>
     </div>
   </div>
