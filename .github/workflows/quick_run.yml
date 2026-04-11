@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      # ── Cache pip packages ───────────────────────────────────────────────────
+      # ── Cache pip packages ─────────────────────────────────────────────────
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
@@ -47,9 +47,7 @@ jobs:
       - name: Install dependencies
         run: pip install pandas openpyxl pyarrow
 
-      # ── Cache db/ (parquet files) keyed by bhav_data hash ───────────────────
-      # FIX W1: Cache key includes signals_quick so it is always consistent.
-      # Steps 1-4 run when: (a) cache miss, OR (b) rebuild_db=true manual trigger.
+      # ── Cache db/ keyed by bhav_data hash ─────────────────────────────────
       - name: Cache db/ parquet files
         id: cache-db
         uses: actions/cache@v4
@@ -58,32 +56,25 @@ jobs:
           key: db-quick-${{ hashFiles('bhav_data/**') }}
           restore-keys: db-quick-
 
-      # ── Determine rebuild flag ───────────────────────────────────────────────
-      # FIX W3: String comparison fixed — rebuild=true only when explicitly set
-      # or when cache was missed (new bhav data present).
+      # ── FIX W3: Rebuild flag with correct string handling ──────────────────
       - name: Set rebuild flag
         id: flags
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # Scheduled: rebuild only when bhav_data changed (cache miss)
             if [ "${{ steps.cache-db.outputs.cache-hit }}" != "true" ]; then
-              echo "rebuild=true" >> $GITHUB_OUTPUT
-              echo "ℹ️  Cache miss — bhav_data changed, rebuilding DB"
+              echo "rebuild=true"  >> $GITHUB_OUTPUT
+              echo "ℹ️  Cache miss — rebuilding DB"
             else
               echo "rebuild=false" >> $GITHUB_OUTPUT
-              echo "ℹ️  Cache hit — DB unchanged, running simulation only"
+              echo "ℹ️  Cache hit — skipping DB rebuild"
             fi
           else
-            # Manual dispatch: respect the rebuild_db input
             VAL="${{ github.event.inputs.rebuild_db }}"
             echo "rebuild=${VAL:-false}" >> $GITHUB_OUTPUT
             echo "ℹ️  Manual run — rebuild_db=${VAL:-false}"
           fi
 
-      # ── Steps 1-4: Build DB ─────────────────────────────────────────────────
-      # FIX W1: Steps 1-3 run on cache miss OR rebuild=true.
-      # Step 4 (filter signals) ALWAYS runs — signals_quick.parquet must be fresh
-      # every run because signal_end_date could now include today's data.
+      # ── Steps 1-3: Build DB (only on cache miss or rebuild=true) ──────────
       - name: Step 1 — Consolidate CSVs
         if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
         run: python src/01_consolidate_csv.py
@@ -96,11 +87,10 @@ jobs:
         if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
         run: python src/03_find_ath.py
 
-      # FIX W1 KEY: Step 4 runs ALWAYS — not tied to cache.
-      # signals_quick.parquet must be regenerated every run because today's signals
-      # depend on the most recent trading date in eq_data.parquet.
+      # ── FIX W1: Step 4 ALWAYS runs — signals must be fresh every run ───────
+      # signals_quick.parquet is NOT in the db/ cache.
       # Without this, Step 5 crashes with: Missing: db/signals_quick.parquet
-      - name: Step 4 — Filter Signals (QUICK mode)
+      - name: Step 4 — Filter Signals (QUICK mode — always fresh)
         run: |
           SYMS="${{ github.event.inputs.symbols || '' }}"
           if [ -n "$SYMS" ]; then
@@ -109,7 +99,7 @@ jobs:
             python src/04_filter_signals.py --mode quick
           fi
 
-      # ── Step 5: Run simulation ───────────────────────────────────────────────
+      # ── Step 5: Run simulation ────────────────────────────────────────────
       - name: Step 5 — Run Quick Simulation
         id: sim
         run: |
@@ -120,7 +110,25 @@ jobs:
             python src/05_run_simulation.py --mode quick
           fi
 
-      # ── Upload dated output as artifact ─────────────────────────────────────
+      # ── FIX W-NEW: Commit dated output file back to this repo ─────────────
+      # This saves QuickRun_Picks_YYYYMMDD_HHMMSS.xlsx to output/YYYY-MM/ in repo.
+      # The dated file is your permanent history. latest_quickrun.xlsx is the
+      # live dashboard file (deployed to nse-btst-dashboard repo below).
+      - name: Commit output to repo
+        if: steps.sim.outcome == 'success'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage only the dated output file (not latest_quickrun.xlsx — that goes to dashboard repo)
+          git add "output/"
+          git diff --cached --quiet && echo "No new output to commit" && exit 0
+
+          git commit -m "quick-run: $(date '+%d-%b-%Y %H:%M IST')"
+          git push origin main
+          echo "✅ Output committed to repo"
+
+      # ── Upload artifact (always — even on failure) ─────────────────────────
       - name: Upload output artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -128,17 +136,19 @@ jobs:
           name: quickrun-output-${{ github.run_number }}
           path: output/
 
-      # ── Deploy dashboard to public nse-btst-dashboard repo ──────────────────
-      # FIX W2: Verify latest_quickrun.xlsx exists before deploying.
-      # If it is missing the step fails loudly instead of silently deploying nothing.
-      - name: Deploy dashboard to public GitHub Pages repo
+      # ── FIX W2: Deploy dashboard — fail loudly if Excel missing ───────────
+      - name: Deploy dashboard to nse-btst-dashboard
         if: steps.sim.outcome == 'success'
         run: |
-          # Fail immediately if latest_quickrun.xlsx was not produced
+          # Hard fail if latest_quickrun.xlsx was not produced
           if [ ! -f output/latest_quickrun.xlsx ]; then
-            echo "❌ output/latest_quickrun.xlsx not found — simulation may have produced no signals"
+            echo "❌ output/latest_quickrun.xlsx not found"
+            echo "   Simulation may have produced no signals, or Step 5 failed silently"
             exit 1
           fi
+
+          SIZE=$(du -sh output/latest_quickrun.xlsx | cut -f1)
+          echo "✅ latest_quickrun.xlsx found — size: $SIZE"
 
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -150,17 +160,18 @@ jobs:
           # Copy dashboard HTML
           cp dashboard/index.html /tmp/dashboard-repo/index.html
 
-          # Copy latest quickrun Excel
+          # Copy latest quickrun Excel — this is what the dashboard auto-fetches
           cp output/latest_quickrun.xlsx /tmp/dashboard-repo/latest_quickrun.xlsx
-          echo "✅ Copied latest_quickrun.xlsx ($(du -sh output/latest_quickrun.xlsx | cut -f1))"
+          echo "✅ Copied latest_quickrun.xlsx ($SIZE)"
 
-          # Write metadata
-          echo "{\"last_run\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\"run_number\":${{ github.run_number }}}" \
+          # Write metadata (used by dashboard auto-load banner)
+          echo "{\"last_run\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\"run_number\":${{ github.run_number }},\"size_kb\":\"$SIZE\"}" \
             > /tmp/dashboard-repo/meta.json
 
           # Commit and push
           cd /tmp/dashboard-repo
           git add .
-          git diff --cached --quiet || git commit -m "Deploy dashboard — Run #${{ github.run_number }} $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git diff --cached --quiet || git commit -m \
+            "Deploy dashboard — Run #${{ github.run_number }} $(date -u '+%Y-%m-%d %H:%M UTC')"
           git push origin main
           echo "✅ Dashboard deployed → https://spurandhar0.github.io/nse-btst-dashboard/"
