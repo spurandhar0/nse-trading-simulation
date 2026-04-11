@@ -88,7 +88,7 @@ LIGHT = "00F2F2F2"
 # Excel number format strings
 FMT_DATE  = "DD-MM-YYYY"
 FMT_PRICE = "0.00"
-FMT_PCT   = "0.00%"
+FMT_PCT   = "0.00"  # stored as actual percent value (e.g. 10.0), not fraction
 FMT_INT   = "General"
 
 # OHLCV sheet columns (Market Data + Buy History sheets)
@@ -462,7 +462,7 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
 
     # ── Executed — Closed ─────────────────────────────────────────────────────
     profit   = round((exit_price - avg_buy_price) * total_qty, 2)
-    gain_pct = round((exit_price - avg_buy_price) / avg_buy_price, 4) \
+    gain_pct = round(((exit_price - avg_buy_price) / avg_buy_price) * 100, 2) \
                if avg_buy_price > 0 else 0.0
 
     if   exit_type == "Target Achieved":           result_str = "Profit-TGT"
@@ -612,7 +612,7 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
                 "exit_type": None, "result": None, "market_days": market_days}
 
     profit   = round((exit_price - avg_buy_price) * total_qty, 2)
-    gain_pct = round((exit_price - avg_buy_price) / avg_buy_price, 4) \
+    gain_pct = round(((exit_price - avg_buy_price) / avg_buy_price) * 100, 2) \
                if avg_buy_price > 0 else 0
 
     if   exit_type == "Target Achieved":           result = "Profit-TGT"
@@ -779,7 +779,7 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     Assemble one picks-sheet row from a signal dict and simulation result.
     All date fields are Python datetime objects (formatted DD-MM-YYYY by writer).
     Price fields are rounded to 2 decimal places.
-    GainLoss%, 1DChange%, 5DLow% are stored as decimal fractions (e.g. -0.08),
+    GainLoss%, 1DChange%, 5DLow% are stored as actual percentages (e.g. -8.0),
     formatted as percentage in Excel via 0.00% format.
     """
     sym   = str(sig["SYMBOL"])
@@ -818,12 +818,12 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
         qty     = sim["total_qty"]
         if avg_buy and avg_buy > 0 and recent_ltp and qty:
             profit   = round((recent_ltp - avg_buy) * qty, 2)
-            gain_pct = round((recent_ltp - avg_buy) / avg_buy, 4)
+            gain_pct = round(((recent_ltp - avg_buy) / avg_buy) * 100, 2)
 
     row = [
-        float(sig["PCT_1D_CHANGE"]),           # 1DChange%  (decimal fraction)
+        round(float(sig["PCT_1D_CHANGE"]) * 100, 2),  # 1DChange% (actual percent, matches VBA)
         sym,                                    # StockName
-        float(sig["PCT_FROM_LOW"]),             # 5DLow%     (decimal fraction)
+        round(float(sig["PCT_FROM_LOW"]) * 100, 2),   # 5DLow%     (actual percent, matches VBA)
         round(float(sig.get("MIN_5D_LOW") or sig.get("MIN_5D_CLOSE") or 0), 2),  # 5DLowPrice
         recent_ltp,                             # RecentLTP
         buy_date,                               # BuyDate (datetime)
