@@ -554,6 +554,12 @@ tr:hover{
 <div id="toast-container"></div>
 
 <header><h1>📈 PS MARKET - BTST Trading Dashboard</h1><p>Educational purpose only – Not SEBI Registered</p></header>
+<!-- Auto-load status banner — shown briefly on page load when hosted on GitHub Pages -->
+<div id="autoLoadBanner" style="display:none; align-items:center; justify-content:center;
+     padding:10px 20px; margin:0; background:rgba(37,99,235,0.1);
+     border-bottom:2px solid #2563eb; font-size:13px; font-weight:600;">
+  <span id="autoLoadText" style="color:#2563eb;">⏳ Auto-loading latest BTST data...</span>
+</div>
 
 <div class="container">
 <div class="card">
@@ -837,6 +843,121 @@ let stockHistoryData = {};
 
 let wb=null,allRows=[],selectedDate='',charts={};
 const pageState={calls:{page:1,size:100},ledger:{page:1,size:100},holding:{page:1,size:100},closed:{page:1,size:100},avgTrigger:{page:1,size:100},sellTrigger:{page:1,size:100},avgHistory:{page:1,size:100},forceExit:{page:1,size:100}};
+
+// ── AUTO-FETCH from GitHub Pages ──────────────────────────────────────────
+// When dashboard is opened on GitHub Pages, automatically load latest_quickrun.xlsx
+// Falls back gracefully when opened locally (file:// protocol)
+async function autoLoadFromGitHubPages() {
+    // Only auto-fetch when served over HTTP/HTTPS (not local file://)
+    if (window.location.protocol === 'file:') return;
+
+    const EXCEL_URL = 'latest_quickrun.xlsx';
+    const META_URL  = 'meta.json';
+
+    // Show auto-loading banner
+    const banner = document.getElementById('autoLoadBanner');
+    if (banner) {
+        banner.style.display = 'flex';
+        banner.querySelector('#autoLoadText').textContent = '⏳ Auto-loading latest BTST data...';
+    }
+
+    try {
+        // Read meta.json first (small file) to get last run time
+        let lastRun = '';
+        try {
+            const metaResp = await fetch(META_URL + '?t=' + Date.now());
+            if (metaResp.ok) {
+                const meta = await metaResp.json();
+                if (meta.last_run) {
+                    const d = new Date(meta.last_run);
+                    lastRun = d.toLocaleString('en-IN', {timeZone:'Asia/Kolkata',
+                        day:'2-digit', month:'short', year:'numeric',
+                        hour:'2-digit', minute:'2-digit'});
+                }
+            }
+        } catch(e) {}
+
+        // Fetch the Excel file
+        const resp = await fetch(EXCEL_URL + '?t=' + Date.now());
+        if (!resp.ok) {
+            throw new Error('HTTP ' + resp.status + ' — file not found');
+        }
+
+        const arrayBuffer = await resp.arrayBuffer();
+        const data = new Uint8Array(arrayBuffer);
+
+        // Re-use the same loading logic as manual upload
+        setLoading(true, 'Processing Excel data...');
+
+        wb = XLSX.read(data, {type:'array', cellDates:true});
+
+        // Reset History Data
+        stockHistoryData = {};
+
+        const sheet = wb.Sheets['Pickse'] || wb.Sheets['pickse'] || wb.Sheets[wb.SheetNames[0]];
+        allRows = XLSX.utils.sheet_to_json(sheet, {raw:false, dateNF:'yyyy-mm-dd', defval:''});
+
+        // Load historical sheets (MarketData, BuyHistory)
+        wb.SheetNames.forEach((sheetName, index) => {
+            if (sheetName.toLowerCase() === 'pickse' || index === 0) return;
+            const histSheet = wb.Sheets[sheetName];
+            const histRows  = XLSX.utils.sheet_to_json(histSheet, {raw:false, defval:''});
+            histRows.forEach(row => {
+                let symbol=null, dateVal=null, prevClose=null, openPrice=null,
+                    highPrice=null, lowPrice=null, closePrice=null;
+                for (const key in row) {
+                    const k = key.trim();
+                    if (k==='SYMBOL')     symbol     = String(row[key]||'').trim();
+                    if (k==='DATE1')      dateVal    = String(row[key]||'').trim();
+                    if (k==='PREV_CLOSE') prevClose  = parseNum(row[key]);
+                    if (k==='OPEN_PRICE') openPrice  = parseNum(row[key]);
+                    if (k==='HIGH_PRICE') highPrice  = parseNum(row[key]);
+                    if (k==='LOW_PRICE')  lowPrice   = parseNum(row[key]);
+                    if (k==='CLOSE_PRICE')closePrice = parseNum(row[key]);
+                }
+                if (symbol && dateVal) {
+                    if (!stockHistoryData[symbol]) stockHistoryData[symbol] = [];
+                    stockHistoryData[symbol].push({date:dateVal,prevClose,openPrice,highPrice,lowPrice,closePrice});
+                }
+            });
+        });
+
+        populateDates();
+        renderAll();
+        setLoading(false);
+
+        if (banner) {
+            const label = lastRun ? '✅ Auto-loaded — Last run: ' + lastRun + ' IST' : '✅ Data loaded automatically';
+            banner.querySelector('#autoLoadText').textContent = label;
+            banner.style.background = 'rgba(16,185,129,0.15)';
+            banner.style.borderColor = '#10b981';
+            banner.querySelector('#autoLoadText').style.color = '#10b981';
+            // Hide banner after 5 seconds
+            setTimeout(() => { banner.style.display = 'none'; }, 5000);
+        }
+
+        // Update file info
+        const fileInfo = document.getElementById('fileInfo');
+        if (fileInfo) {
+            fileInfo.textContent = '✅ Auto-loaded: latest_quickrun.xlsx' + (lastRun ? ' (' + lastRun + ')' : '');
+            fileInfo.style.color = '#10b981';
+        }
+
+    } catch(err) {
+        console.warn('Auto-load failed:', err.message);
+        if (banner) {
+            banner.querySelector('#autoLoadText').textContent =
+                '⚠️ Auto-load failed (' + err.message + ') — use Upload Excel button';
+            banner.style.background = 'rgba(245,158,11,0.15)';
+            banner.style.borderColor = '#f59e0b';
+            banner.querySelector('#autoLoadText').style.color = '#f59e0b';
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', autoLoadFromGitHubPages);
+// ─────────────────────────────────────────────────────────────────────────────
+
 const els={file:document.getElementById('file'),fileInfo:document.getElementById('fileInfo'),loading:document.getElementById('loading'),loadingText:document.getElementById('loadingText'),dateBox:document.getElementById('dateBox'),dateSelect:document.getElementById('dateSelect'),dlGroup:document.getElementById('dlGroup'),filterPill:document.getElementById('filterPill'),tabs:document.getElementById('tabs'),exports:document.getElementById('exports'),overviewStats:document.getElementById('overviewStats'),ledgerBadges:document.getElementById('ledgerBadges'),holdingBadges:document.getElementById('holdingBadges'),closedBadges:document.getElementById('closedBadges'),ledgerTable:document.getElementById('ledgerTable'),callsTable:document.getElementById('callsTable'),holdingTable:document.getElementById('holdingTable'),closedTable:document.getElementById('closedTable'),dailyTable:document.getElementById('dailyTable'),ledgerPager:document.getElementById('ledgerPager'),callsPager:document.getElementById('callsPager'),holdingPager:document.getElementById('holdingPager'),closedPager:document.getElementById('closedPager'),avgTriggerTable:document.getElementById('avgTriggerTable'),avgTriggerPager:document.getElementById('avgTriggerPager'),sellTriggerTable:document.getElementById('sellTriggerTable'),sellTriggerPager:document.getElementById('sellTriggerPager'),avgHistoryTable:document.getElementById('avgHistoryTable'),avgHistoryPager:document.getElementById('avgHistoryPager')};
 
 
@@ -954,7 +1075,7 @@ function resetDateRange(){
 
 // filteredRows
 function filteredRows(){
-    if(!selectedDate)return[];
+    if(!selectedDate)return allRows;
     let rows=allRows.filter(r=>{const d=predDateKey(r);return d&&dateLE(d,selectedDate)});
     if(dateRangeActive&&fromDateGlobal&&toDateGlobal){
         rows=rows.filter(r=>{const d=predDateKey(r);return d&&dateLE(fromDateGlobal,d)&&dateLE(d,toDateGlobal)})
@@ -964,19 +1085,10 @@ function filteredRows(){
 
 // Filter Functions
 function filteredCalls() {
+    // Fresh BTST calls = Pending rows only (buy not yet triggered)
     return filteredRows().filter(r => {
         const orderValue = String(r['Order'] || '').trim().toLowerCase();
-        
-        // Check for "Invalid" - only include if Action column has specific message
-        if (orderValue === 'invalid') {
-            const resultValue = String(r['Result'] || '').trim();
-            return resultValue === 'Invalid: No market data found';
-        }
-        
-        // Always include "Pending" (these are open calls)
-        if (orderValue === 'pending') return true;
-        
-        return false;
+        return orderValue === 'pending';
     });
 }
 
@@ -1464,8 +1576,8 @@ function renderCalls(){
         return;
     }
     
-    const freshCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='invalid').length;
-    const openCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='pending').length;
+    const freshCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='pending').length;
+    const openCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='executed'&&String(r['Status']||'').trim().toLowerCase()==='open').length;
     badgeEl.innerHTML=`<span class="badge">Total Calls: ${total}</span><span class="badge green">Fresh: ${freshCount}</span><span class="badge" style="background:#f59e0b; color:#fff;">Open: ${openCount}</span>`;
 
     let html='<table><thead><tr><th>Date</th><th>Stock</th><th>1D%</th><th>5D%</th><th>Buy Price</th><th>LTP</th><th>Target</th><th>SL</th><th>Status</th></tr></thead><tbody>';
@@ -1474,10 +1586,10 @@ function renderCalls(){
         if(buyPrice<=0)continue;
         const ltp=parseNum(r['RecentLTP']||buyPrice);
         const orderStatus=String(r['Order']||'').trim().toLowerCase();
-        const isFresh=orderStatus==='invalid';
+        const isFresh=orderStatus==='pending';
         const statusBtnClass=isFresh?'fresh-call':'open-call';
         const statusText=isFresh?'Fresh Call':'Open Call';
-        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(buyPrice*1.25)}</td><td class="red">${fmtCur(buyPrice*0.75)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
+        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
     }
     html+='</tbody></table>';
     els.callsTable.innerHTML=html
@@ -1506,7 +1618,7 @@ function renderLedger(){
     let html='<table><thead><tr><th>Date</th><th>Stock</th><th>Order</th><th>Status</th><th>Avg Buy</th><th>Qty (₹10k)</th><th>Inv</th><th>LTP</th><th>P&L</th><th>%</th><th>Cum</th></tr></thead><tbody>';
     for(const r of slice){
         const entry=parseNum(r['AvgBuyPrice'])||parseNum(r['BuyClPrice']);
-        const qty=Math.round(10000/entry);
+        const qty=qtyOf(r)>0?qtyOf(r):Math.round(10000/entry);
         const ltp=parseNum(r['RecentLTP']||entry);
         const investment=qty*entry;
         const pnl=pnlRowExcel(r);
@@ -1633,8 +1745,8 @@ function renderSellTrigger(){
         const qty=qtyOf(r);
         const pnl=(ltp-avgBuy)*qty;
         const pnlPct=((ltp-avgBuy)/avgBuy)*100;
-        const triggerPrice=avgBuy*1.20;
-        const targetPrice=avgBuy*1.25;
+        const triggerPrice=parseNum(r['StoplossPrice'])||avgBuy*0.80;
+        const targetPrice=parseNum(r['TargetPrice'])||avgBuy*1.10;
         const distPct=((ltp-triggerPrice)/triggerPrice)*100;
         html+=`<tr><td>${r.StockName}</td><td>${fmtCur(avgBuy)}</td><td class="${colorCls(pnl)}">${fmtCur(ltp)}</td><td class="${colorCls(pnl)}">${fmtCur(pnl)}</td><td class="${colorCls(pnl)}">${pnlPct.toFixed(2)}%</td><td>${fmtCur(triggerPrice)}</td><td style="color:#10b981;font-weight:bold">${fmtCur(targetPrice)}</td><td class="green">${distPct.toFixed(2)}%</td><td><span class="badge" style="background:#ef4444; color:#fff">SELL SIGNAL</span></td></tr>`;
     });

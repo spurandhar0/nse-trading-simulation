@@ -554,6 +554,12 @@ tr:hover{
 <div id="toast-container"></div>
 
 <header><h1>📈 PS MARKET - BTST Trading Dashboard</h1><p>Educational purpose only – Not SEBI Registered</p></header>
+<!-- Auto-load status banner — shown briefly on page load when hosted on GitHub Pages -->
+<div id="autoLoadBanner" style="display:none; align-items:center; justify-content:center;
+     padding:10px 20px; margin:0; background:rgba(37,99,235,0.1);
+     border-bottom:2px solid #2563eb; font-size:13px; font-weight:600;">
+  <span id="autoLoadText" style="color:#2563eb;">⏳ Auto-loading latest BTST data...</span>
+</div>
 
 <div class="container">
 <div class="card">
@@ -837,6 +843,121 @@ let stockHistoryData = {};
 
 let wb=null,allRows=[],selectedDate='',charts={};
 const pageState={calls:{page:1,size:100},ledger:{page:1,size:100},holding:{page:1,size:100},closed:{page:1,size:100},avgTrigger:{page:1,size:100},sellTrigger:{page:1,size:100},avgHistory:{page:1,size:100},forceExit:{page:1,size:100}};
+
+// ── AUTO-FETCH from GitHub Pages ──────────────────────────────────────────
+// When dashboard is opened on GitHub Pages, automatically load latest_quickrun.xlsx
+// Falls back gracefully when opened locally (file:// protocol)
+async function autoLoadFromGitHubPages() {
+    // Only auto-fetch when served over HTTP/HTTPS (not local file://)
+    if (window.location.protocol === 'file:') return;
+
+    const EXCEL_URL = 'latest_quickrun.xlsx';
+    const META_URL  = 'meta.json';
+
+    // Show auto-loading banner
+    const banner = document.getElementById('autoLoadBanner');
+    if (banner) {
+        banner.style.display = 'flex';
+        banner.querySelector('#autoLoadText').textContent = '⏳ Auto-loading latest BTST data...';
+    }
+
+    try {
+        // Read meta.json first (small file) to get last run time
+        let lastRun = '';
+        try {
+            const metaResp = await fetch(META_URL + '?t=' + Date.now());
+            if (metaResp.ok) {
+                const meta = await metaResp.json();
+                if (meta.last_run) {
+                    const d = new Date(meta.last_run);
+                    lastRun = d.toLocaleString('en-IN', {timeZone:'Asia/Kolkata',
+                        day:'2-digit', month:'short', year:'numeric',
+                        hour:'2-digit', minute:'2-digit'});
+                }
+            }
+        } catch(e) {}
+
+        // Fetch the Excel file
+        const resp = await fetch(EXCEL_URL + '?t=' + Date.now());
+        if (!resp.ok) {
+            throw new Error('HTTP ' + resp.status + ' — file not found');
+        }
+
+        const arrayBuffer = await resp.arrayBuffer();
+        const data = new Uint8Array(arrayBuffer);
+
+        // Re-use the same loading logic as manual upload
+        setLoading(true, 'Processing Excel data...');
+
+        wb = XLSX.read(data, {type:'array', cellDates:true});
+
+        // Reset History Data
+        stockHistoryData = {};
+
+        const sheet = wb.Sheets['Pickse'] || wb.Sheets['pickse'] || wb.Sheets[wb.SheetNames[0]];
+        allRows = XLSX.utils.sheet_to_json(sheet, {raw:false, dateNF:'yyyy-mm-dd', defval:''});
+
+        // Load historical sheets (MarketData, BuyHistory)
+        wb.SheetNames.forEach((sheetName, index) => {
+            if (sheetName.toLowerCase() === 'pickse' || index === 0) return;
+            const histSheet = wb.Sheets[sheetName];
+            const histRows  = XLSX.utils.sheet_to_json(histSheet, {raw:false, defval:''});
+            histRows.forEach(row => {
+                let symbol=null, dateVal=null, prevClose=null, openPrice=null,
+                    highPrice=null, lowPrice=null, closePrice=null;
+                for (const key in row) {
+                    const k = key.trim();
+                    if (k==='SYMBOL')     symbol     = String(row[key]||'').trim();
+                    if (k==='DATE1')      dateVal    = String(row[key]||'').trim();
+                    if (k==='PREV_CLOSE') prevClose  = parseNum(row[key]);
+                    if (k==='OPEN_PRICE') openPrice  = parseNum(row[key]);
+                    if (k==='HIGH_PRICE') highPrice  = parseNum(row[key]);
+                    if (k==='LOW_PRICE')  lowPrice   = parseNum(row[key]);
+                    if (k==='CLOSE_PRICE')closePrice = parseNum(row[key]);
+                }
+                if (symbol && dateVal) {
+                    if (!stockHistoryData[symbol]) stockHistoryData[symbol] = [];
+                    stockHistoryData[symbol].push({date:dateVal,prevClose,openPrice,highPrice,lowPrice,closePrice});
+                }
+            });
+        });
+
+        populateDates();
+        renderAll();
+        setLoading(false);
+
+        if (banner) {
+            const label = lastRun ? '✅ Auto-loaded — Last run: ' + lastRun + ' IST' : '✅ Data loaded automatically';
+            banner.querySelector('#autoLoadText').textContent = label;
+            banner.style.background = 'rgba(16,185,129,0.15)';
+            banner.style.borderColor = '#10b981';
+            banner.querySelector('#autoLoadText').style.color = '#10b981';
+            // Hide banner after 5 seconds
+            setTimeout(() => { banner.style.display = 'none'; }, 5000);
+        }
+
+        // Update file info
+        const fileInfo = document.getElementById('fileInfo');
+        if (fileInfo) {
+            fileInfo.textContent = '✅ Auto-loaded: latest_quickrun.xlsx' + (lastRun ? ' (' + lastRun + ')' : '');
+            fileInfo.style.color = '#10b981';
+        }
+
+    } catch(err) {
+        console.warn('Auto-load failed:', err.message);
+        if (banner) {
+            banner.querySelector('#autoLoadText').textContent =
+                '⚠️ Auto-load failed (' + err.message + ') — use Upload Excel button';
+            banner.style.background = 'rgba(245,158,11,0.15)';
+            banner.style.borderColor = '#f59e0b';
+            banner.querySelector('#autoLoadText').style.color = '#f59e0b';
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', autoLoadFromGitHubPages);
+// ─────────────────────────────────────────────────────────────────────────────
+
 const els={file:document.getElementById('file'),fileInfo:document.getElementById('fileInfo'),loading:document.getElementById('loading'),loadingText:document.getElementById('loadingText'),dateBox:document.getElementById('dateBox'),dateSelect:document.getElementById('dateSelect'),dlGroup:document.getElementById('dlGroup'),filterPill:document.getElementById('filterPill'),tabs:document.getElementById('tabs'),exports:document.getElementById('exports'),overviewStats:document.getElementById('overviewStats'),ledgerBadges:document.getElementById('ledgerBadges'),holdingBadges:document.getElementById('holdingBadges'),closedBadges:document.getElementById('closedBadges'),ledgerTable:document.getElementById('ledgerTable'),callsTable:document.getElementById('callsTable'),holdingTable:document.getElementById('holdingTable'),closedTable:document.getElementById('closedTable'),dailyTable:document.getElementById('dailyTable'),ledgerPager:document.getElementById('ledgerPager'),callsPager:document.getElementById('callsPager'),holdingPager:document.getElementById('holdingPager'),closedPager:document.getElementById('closedPager'),avgTriggerTable:document.getElementById('avgTriggerTable'),avgTriggerPager:document.getElementById('avgTriggerPager'),sellTriggerTable:document.getElementById('sellTriggerTable'),sellTriggerPager:document.getElementById('sellTriggerPager'),avgHistoryTable:document.getElementById('avgHistoryTable'),avgHistoryPager:document.getElementById('avgHistoryPager')};
 
 
@@ -964,8 +1085,7 @@ function filteredRows(){
 
 // Filter Functions
 function filteredCalls() {
-    // Fresh BTST calls = Pending orders (buy not yet triggered today)
-    // Invalid = bad/suspended/delisted stocks — excluded
+    // Fresh BTST calls = Pending rows only (buy not yet triggered)
     return filteredRows().filter(r => {
         const orderValue = String(r['Order'] || '').trim().toLowerCase();
         return orderValue === 'pending';
