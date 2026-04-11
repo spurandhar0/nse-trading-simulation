@@ -806,7 +806,7 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
         float(sig["PCT_1D_CHANGE"]),           # 1DChange%  (decimal fraction)
         sym,                                    # StockName
         float(sig["PCT_FROM_LOW"]),             # 5DLow%     (decimal fraction)
-        round(float(sig["MIN_5D_LOW"]), 2),    # 5DLowPrice (min LOW_PRICE over lookback)
+        round(float(sig.get("MIN_5D_LOW") or sig.get("MIN_5D_CLOSE") or 0), 2),  # 5DLowPrice
         recent_ltp,                             # RecentLTP
         buy_date,                               # BuyDate (datetime)
         buy_cl_price,                           # BuyClPrice
@@ -1270,8 +1270,9 @@ def main():
 
         # ── Sort Picks by BuyDate descending (latest first, None rows at end) ─
         # BuyDate is at column index 5 (0-based) in the picks row
+        # Sort: latest BuyDate first, rows with no BuyDate (Pending/Invalid) at end
         all_rows.sort(
-            key=lambda r: (0 if r[5] is None else 1, r[5] if r[5] else datetime.min),
+            key=lambda r: (r[5] is not None, r[5] if r[5] is not None else datetime.min),
             reverse=True
         )
 
