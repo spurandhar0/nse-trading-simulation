@@ -22,7 +22,7 @@ Modes:
 
 SIMULATION RULES:
   - Entry  : D+1 low <= signal_close  -> buy at signal_close price (B0)
-  - Additional buys: when buy_count <= max_buys AND next-buy-level >= stop_price
+  - Additional buys: when buy_count < max_buys (VBA: buyCount < maxBuys) AND next-buy-level >= stop_price
   - Same-day buy and sell NOT allowed (exit checks skip the buy day itself)
   - Invalid (case 1): signal date is the last available date for that symbol (no D+1 data)
   - Invalid (case 2): >10 consecutive calendar days between signal date and next
@@ -34,7 +34,7 @@ SIMULATION RULES:
   - Stop   : based on signal_close (USE_AVGBUY_FOR_STOPLOSS = False)
   - Target : updated on each additional buy (USE_AVGBUY_FOR_TARGET = True)
 
-PICKS SHEET COLUMNS (quick mode — 50 columns for max_buys=2):
+PICKS SHEET COLUMNS (quick mode — 44 columns for max_buys=2):
   1DChange%, StockName, 5DLow%, 5DLowPrice, RecentLTP,
   BuyDate, BuyClPrice, 5DLowDate, TodayDate,
   BuyCount, AvgBuyPrice, TotalQty, TargetPrice, StoplossPrice, TotalInvestment,
@@ -42,8 +42,7 @@ PICKS SHEET COLUMNS (quick mode — 50 columns for max_buys=2):
   Action, BuyChance, SoldDate, SoldPrice, SoldPrevClose, SoldOpen,
   SoldHigh, SoldLow, SoldClose,
   B0_BoughtDate/PrevClose/Open/High/Low/Close,
-  B1_BoughtDate/PrevClose/Open/High/Low/Close,
-  B2_BoughtDate/PrevClose/Open/High/Low/Close
+  B1_BoughtDate/PrevClose/Open/High/Low/Close
 
 43 AGGREGATE COLUMNS (full mode — exact order):
   Test, DAYSBACK, PCTMIN, PCTMAX, ATHMIN, ATHMAX, MAXBUYS, BUYDROP,
@@ -233,8 +232,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
       - Loop: range(start_idx+1, last_idx)  -- excludes the very last data day
         ("today") from both buy attempts and exit checks.
       - Same-day buy and sell NOT allowed: exit checks skip the buy day itself.
-      - max_buys = number of ADDITIONAL dip buys;
-        total buy slots = max_buys+1 (B0..B(max_buys))
+      - max_buys = TOTAL buy slots (VBA semantics: buyCount < max_buys);
+        total buy blocks = max_buys (B0..B(max_buys-1))
     """
     invalid = {
         "order": "Invalid", "status": None, "action": "Skip",
@@ -374,8 +373,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
                     exit_idx   = i
                     break
 
-            # ── Additional buys (buy_count <= max_buys means we can buy more) ─
-            if not exit_found and not is_buy_day and buy_count <= max_buys:
+            # ── Additional buys (VBA: buyCount < maxBuys) ─────────────────────
+            if not exit_found and not is_buy_day and buy_count < max_buys:
                 buy_level = round(avg_buy_price * (1 - buy_drop), 2)
                 if low_px <= buy_level:
                     had_buy_chance = True
@@ -570,7 +569,7 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
                 if cal_days >= force_exit_calendar_days:
                     exit_found = True; exit_price = round(close_px, 2)
                     exit_type  = "Force Exit - Calendar Days"; exit_date = curr_ts; break
-            if not exit_found and not is_buy_day and buy_count <= max_buys:
+            if not exit_found and not is_buy_day and buy_count < max_buys:
                 buy_level = round(avg_buy_price * (1 - buy_drop), 2)
                 if buy_level >= stop_price and low_px <= buy_level:
                     buy_count        += 1
@@ -702,7 +701,7 @@ def aggregate_stats(results):
 def get_picks_columns(max_buys):
     """
     Column headers for Picks Sheet.
-    max_buys additional dip buys -> total buy blocks = max_buys+1 (B0..B(max_buys))
+    VBA semantics: total buy blocks = max_buys (B0..B(max_buys-1))
     """
     cols = [
         "1DChange%", "StockName", "5DLow%", "5DLowPrice", "RecentLTP",
@@ -713,7 +712,7 @@ def get_picks_columns(max_buys):
         "SoldDate", "SoldPrice", "SoldPrevClose", "SoldOpen",
         "SoldHigh", "SoldLow", "SoldClose",
     ]
-    for b in range(max_buys + 1):   # B0 through B(max_buys)
+    for b in range(max_buys):       # B0 through B(max_buys-1)
         cols += [
             f"B{b}_BoughtDate", f"B{b}_PrevClose", f"B{b}_Open",
             f"B{b}_High",       f"B{b}_Low",        f"B{b}_Close",
@@ -838,9 +837,9 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
         sim["sold_close"],                      # SoldClose
     ]
 
-    # Per-buy blocks B0..B(max_buys)
+    # Per-buy blocks B0..B(max_buys-1) — VBA: buyCount < max_buys
     buys = sim.get("buys", [])
-    for b in range(max_buys + 1):
+    for b in range(max_buys):
         if b < len(buys):
             bdata = buys[b]
             row += [
