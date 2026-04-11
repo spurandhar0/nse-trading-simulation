@@ -527,17 +527,17 @@ async function autoLoadFromGitHubPages() {
         // Update no-data placeholder with error
         const noDataEl = document.getElementById('noDataBanner');
         if (noDataEl) {
-            noDataEl.innerHTML = \`
+            noDataEl.innerHTML = `
             <div style="font-size:40px;margin-bottom:12px;">⚠️</div>
             <div style="font-size:17px;font-weight:800;color:#dc2626;margin-bottom:8px;">Data Not Available</div>
-            <div style="font-size:13px;color:var(--text3);margin-bottom:6px;">\${
+            <div style="font-size:13px;color:var(--text3);margin-bottom:6px;">${
                 err.message.includes('404')
                 ? 'No data file found — GitHub workflow needs to run first'
                 : 'Could not load data: ' + err.message
             }</div>
             <div style="font-size:11px;color:var(--text3);">
                 Go to Actions → Quick Run → Run workflow (rebuild_db=true)
-            </div>\`;
+            </div>`;
         }
         if (banner) {
             banner.querySelector('#autoLoadText').textContent = '⚠️ Data unavailable — ' + 
