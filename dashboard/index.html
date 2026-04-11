@@ -558,12 +558,7 @@ tr:hover{
 <div class="container">
 <div class="card">
     <div class="row">
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <button id="refreshBtn" onclick="autoLoad()">🔄 Auto-Load Latest Data</button>
-            <button onclick="document.getElementById('file').click()" class="btn-outline btn-sm" style="margin-left:4px;">📁 Manual Upload</button>
-            <input id="file" type="file" accept=".xlsx,.xls,.xlsm,.XLSX,.XLS,.XLSM" hidden>
-            <span id="autoLoadStatus" style="color:#64748b;font-size:12px;font-weight:600;margin-left:6px;"></span>
-        </div>
+        <div><button onclick="document.getElementById('file').click()">📁 Upload Excel</button><input id="file" type="file" accept=".xlsx,.xls,.xlsm,.XLSX,.XLS,.XLSM" hidden></div>
         <div id="exports" class="export hidden">
             <button onclick="exportExcel()">📊 Export Excel</button>
             <button onclick="exportPDF()">📄 Export PDF</button>
@@ -842,13 +837,12 @@ let stockHistoryData = {};
 
 let wb=null,allRows=[],selectedDate='',charts={};
 const pageState={calls:{page:1,size:100},ledger:{page:1,size:100},holding:{page:1,size:100},closed:{page:1,size:100},avgTrigger:{page:1,size:100},sellTrigger:{page:1,size:100},avgHistory:{page:1,size:100},forceExit:{page:1,size:100}};
-const els={file:document.getElementById('file'),fileInfo:document.getElementById('fileInfo'),loading:document.getElementById('loading'),loadingText:document.getElementById('loadingText'),dateBox:document.getElementById('dateBox'),dateSelect:document.getElementById('dateSelect'),dlGroup:document.getElementById('dlGroup'),filterPill:document.getElementById('filterPill'),tabs:document.getElementById('tabs'),exports:document.getElementById('exports'),overviewStats:document.getElementById('overviewStats'),ledgerBadges:document.getElementById('ledgerBadges'),holdingBadges:document.getElementById('holdingBadges'),closedBadges:document.getElementById('closedBadges'),ledgerTable:document.getElementById('ledgerTable'),callsTable:document.getElementById('callsTable'),holdingTable:document.getElementById('holdingTable'),closedTable:document.getElementById('closedTable'),dailyTable:document.getElementById('dailyTable'),ledgerPager:document.getElementById('ledgerPager'),callsPager:document.getElementById('callsPager'),holdingPager:document.getElementById('holdingPager'),closedPager:document.getElementById('closedPager'),avgTriggerTable:document.getElementById('avgTriggerTable'),avgTriggerPager:document.getElementById('avgTriggerPager'),sellTriggerTable:document.getElementById('sellTriggerTable'),sellTriggerPager:document.getElementById('sellTriggerPager'),avgHistoryTable:document.getElementById('avgHistoryTable'),avgHistoryPager:document.getElementById('avgHistoryPager'),autoLoadStatus:document.getElementById('autoLoadStatus')};
+const els={file:document.getElementById('file'),fileInfo:document.getElementById('fileInfo'),loading:document.getElementById('loading'),loadingText:document.getElementById('loadingText'),dateBox:document.getElementById('dateBox'),dateSelect:document.getElementById('dateSelect'),dlGroup:document.getElementById('dlGroup'),filterPill:document.getElementById('filterPill'),tabs:document.getElementById('tabs'),exports:document.getElementById('exports'),overviewStats:document.getElementById('overviewStats'),ledgerBadges:document.getElementById('ledgerBadges'),holdingBadges:document.getElementById('holdingBadges'),closedBadges:document.getElementById('closedBadges'),ledgerTable:document.getElementById('ledgerTable'),callsTable:document.getElementById('callsTable'),holdingTable:document.getElementById('holdingTable'),closedTable:document.getElementById('closedTable'),dailyTable:document.getElementById('dailyTable'),ledgerPager:document.getElementById('ledgerPager'),callsPager:document.getElementById('callsPager'),holdingPager:document.getElementById('holdingPager'),closedPager:document.getElementById('closedPager'),avgTriggerTable:document.getElementById('avgTriggerTable'),avgTriggerPager:document.getElementById('avgTriggerPager'),sellTriggerTable:document.getElementById('sellTriggerTable'),sellTriggerPager:document.getElementById('sellTriggerPager'),avgHistoryTable:document.getElementById('avgHistoryTable'),avgHistoryPager:document.getElementById('avgHistoryPager')};
 
 
 function parseNum(v){if(!v)return 0;const n=parseFloat(String(v).replace(/,/g,''));return isNaN(n)?0:n}
 function fmtCur(v){return '₹'+parseNum(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function fmtPct(v){return parseNum(v).toFixed(2)+'%'}
-function fmtFracPct(v){return (parseNum(v)*100).toFixed(2)+'%'}
 function colorCls(x){const n=parseNum(x);return n>0?'green':(n<0?'red':'')}
 function setLoading(show,text='Loading…'){if(show){els.loading.classList.remove('hidden');els.loadingText.textContent=text}else els.loading.classList.add('hidden')}
 function pad2(n){return String(n).padStart(2,'0')}
@@ -960,7 +954,7 @@ function resetDateRange(){
 
 // filteredRows
 function filteredRows(){
-    if(!selectedDate)return[];
+    if(!selectedDate)return allRows;
     let rows=allRows.filter(r=>{const d=predDateKey(r);return d&&dateLE(d,selectedDate)});
     if(dateRangeActive&&fromDateGlobal&&toDateGlobal){
         rows=rows.filter(r=>{const d=predDateKey(r);return d&&dateLE(fromDateGlobal,d)&&dateLE(d,toDateGlobal)})
@@ -970,16 +964,11 @@ function filteredRows(){
 
 // Filter Functions
 function filteredCalls() {
+    // Fresh BTST calls = Pending orders (buy not yet triggered today)
+    // Invalid = bad/suspended/delisted stocks — excluded
     return filteredRows().filter(r => {
         const orderValue = String(r['Order'] || '').trim().toLowerCase();
-        
-        // Only "Invalid: No market data found" = Fresh Call; other invalids excluded
-        if (orderValue === 'invalid') return String(r['Result']||'').includes('No market data found');
-        
-        // Always include "Pending" (these are open calls)
-        if (orderValue === 'pending') return true;
-        
-        return false;
+        return orderValue === 'pending';
     });
 }
 
@@ -1007,96 +996,93 @@ function filteredSellTriggers(){
         return ltp>=triggerPrice;
     });
 }
-/* PART 3: FILE UPLOAD, AUTO-LOAD & HISTORICAL DATA LOADING */
+/* PART 3: FILE UPLOAD & HISTORICAL DATA LOADING (FIXED) */
 
-/* ── Shared: process an ArrayBuffer of xlsx bytes ─────────────────────────── */
-function processExcelData(uint8Data, sourceLabel) {
-    try {
-        wb = XLSX.read(uint8Data, {type:'array', cellDates:true});
-
-        // Reset History Data
-        stockHistoryData = {};
-
-        // 1. Read Main Trading Data (Sheet 'Pickse' or first sheet)
-        const sheet = wb.Sheets['Pickse'] || wb.Sheets['pickse'] || wb.Sheets[wb.SheetNames[0]];
-        allRows = XLSX.utils.sheet_to_json(sheet, {raw:false, dateNF:'yyyy-mm-dd', defval:''});
-        console.log('✅ Main sheet loaded:', allRows.length, 'rows');
-
-        // 2. Read Historical Data Sheets (Sheet 2 onwards)
-        wb.SheetNames.forEach((sheetName, index) => {
-            if(sheetName.toLowerCase() === 'pickse' || index === 0) return;
-            const histSheet = wb.Sheets[sheetName];
-            const histRows = XLSX.utils.sheet_to_json(histSheet, {raw:false, dateNF:'yyyy-mm-dd', defval:''});
-            console.log(`📅 Loading ${sheetName}: ${histRows.length} rows`);
-            histRows.forEach(row => {
-                let symbol=null,dateVal=null,prevClose=null,openPrice=null,highPrice=null,lowPrice=null,closePrice=null;
-                for(const key in row){
-                    const k=key.trim();
-                    if(k==='SYMBOL')    symbol    =String(row[key]||'').trim();
-                    if(k==='DATE1')     dateVal   =String(row[key]||'').trim();
-                    if(k==='PREV_CLOSE')prevClose =parseNum(row[key]);
-                    if(k==='OPEN_PRICE')openPrice =parseNum(row[key]);
-                    if(k==='HIGH_PRICE')highPrice =parseNum(row[key]);
-                    if(k==='LOW_PRICE') lowPrice  =parseNum(row[key]);
-                    if(k==='CLOSE_PRICE')closePrice=parseNum(row[key]);
-                }
-                const dateKey=parseDateFromExcel(dateVal);
-                if(symbol&&dateKey&&(prevClose||openPrice||closePrice)){
-                    if(!stockHistoryData[symbol])stockHistoryData[symbol]={};
-                    stockHistoryData[symbol][dateKey]={prev_close:prevClose,open:openPrice,high:highPrice,low:lowPrice,close:closePrice};
-                }
-            });
-        });
-        console.log('✅ Stock History loaded:', Object.keys(stockHistoryData).length, 'symbols');
-
-        els.exports.classList.remove('hidden');
-        initializeDateRangeFilter();
-        populateDates();
-        renderAll();
-
-        // Update status label
-        const now=new Date();
-        const ts=now.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',hour12:false,
-            day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
-        if(els.autoLoadStatus) els.autoLoadStatus.textContent=`✅ ${sourceLabel||'Loaded'} at ${ts} IST`;
-    } catch(err) {
-        console.error('❌ processExcelData error:', err);
-        showToast('Failed to read Excel: '+err.message, 'error');
-    } finally {
-        setLoading(false);
-    }
-}
-
-/* ── Manual file upload ────────────────────────────────────────────────────── */
 els.file.addEventListener('change',(e)=>{
     const f=e.target.files[0];
     if(!f)return;
     setLoading(true,'Reading Excel…');
     const r=new FileReader();
-    r.onload=(ev)=>{ processExcelData(new Uint8Array(ev.target.result), '📁 Uploaded'); };
-    r.onerror=()=>{ setLoading(false); showToast('File read error.', 'error'); };
-    r.readAsArrayBuffer(f);
+    r.onload=(ev)=>{
+        try{
+            const data=new Uint8Array(ev.target.result);
+            wb=XLSX.read(data,{type:'array',cellDates:true});
+            
+            // Reset History Data
+            stockHistoryData = {};
+
+            // 1. Read Main Trading Data (Sheet 1 or 'Pickse')
+            const sheet=wb.Sheets['Pickse']||wb.Sheets['pickse']||wb.Sheets[wb.SheetNames[0]];
+            allRows=XLSX.utils.sheet_to_json(sheet,{raw:false,dateNF:'yyyy-mm-dd',defval:''});
+            
+            console.log('✅ Main sheet loaded:', allRows.length, 'rows');
+            
+            // 2. Read Historical Data Sheets (Sheet 2 onwards)
+            wb.SheetNames.forEach((sheetName, index) => {
+                // Skip main sheet (Pickse or first sheet)
+                if(sheetName.toLowerCase() === 'pickse' || index === 0) return; 
+                
+                const histSheet = wb.Sheets[sheetName];
+                const histRows = XLSX.utils.sheet_to_json(histSheet, {raw: false, defval: ''});
+                
+                console.log(`📅 Loading ${sheetName}: ${histRows.length} rows`);
+                
+                histRows.forEach(row => {
+                    // ⚠️ FIX: Trim leading/trailing spaces from column names
+                    let symbol = null;
+                    let dateVal = null;
+                    let prevClose = null;
+                    let openPrice = null;
+                    let highPrice = null;
+                    let lowPrice = null;
+                    let closePrice = null;
+
+                    // Try different column name variations (with/without spaces)
+                    for (const key in row) {
+                        const trimmedKey = key.trim();
+                        
+                        if (trimmedKey === 'SYMBOL') symbol = String(row[key] || '').trim();
+                        if (trimmedKey === 'DATE1') dateVal = String(row[key] || '').trim();
+                        if (trimmedKey === 'PREV_CLOSE') prevClose = parseNum(row[key]);
+                        if (trimmedKey === 'OPEN_PRICE') openPrice = parseNum(row[key]);
+                        if (trimmedKey === 'HIGH_PRICE') highPrice = parseNum(row[key]);
+                        if (trimmedKey === 'LOW_PRICE') lowPrice = parseNum(row[key]);
+                        if (trimmedKey === 'CLOSE_PRICE') closePrice = parseNum(row[key]);
+                    }
+
+                    const dateKey = parseDateFromExcel(dateVal);
+                    
+                    if(symbol && dateKey && (prevClose || openPrice || closePrice)) {
+                        if(!stockHistoryData[symbol]) stockHistoryData[symbol] = {};
+                        
+                        stockHistoryData[symbol][dateKey] = {
+                            prev_close: prevClose,
+                            open: openPrice,
+                            high: highPrice,
+                            low: lowPrice,
+                            close: closePrice
+                        };
+                    }
+                });
+            });
+            
+            console.log('✅ Stock History Data loaded:', Object.keys(stockHistoryData).length, 'symbols');
+            console.log('Sample ASIANENE data:', stockHistoryData['ASIANENE']);
+            
+            els.exports.classList.remove('hidden');
+            initializeDateRangeFilter();
+            populateDates();
+            renderAll()
+        }catch(err){
+            console.error('❌ Error:', err);
+            showToast('Failed to read Excel: ' + err.message, 'error');
+        }finally{
+            setLoading(false)
+        }
+    };
+    r.onerror=()=>{setLoading(false);showToast('File read error.', 'error')};
+    r.readAsArrayBuffer(f)
 });
-
-/* ── Auto-load from GitHub Pages (latest_quickrun.xlsx) ───────────────────── */
-async function autoLoad() {
-    if(els.autoLoadStatus) els.autoLoadStatus.textContent='⏳ Fetching…';
-    setLoading(true,'Fetching latest market data…');
-    try {
-        const resp = await fetch('latest_quickrun.xlsx?t='+Date.now());
-        if(!resp.ok) throw new Error(`HTTP ${resp.status} – data not available yet. Run the workflow first.`);
-        const buf = await resp.arrayBuffer();
-        processExcelData(new Uint8Array(buf), '🔄 Auto-loaded');
-    } catch(err) {
-        setLoading(false);
-        if(els.autoLoadStatus) els.autoLoadStatus.textContent='⚠️ '+err.message;
-        showToast('Auto-load: '+err.message, 'error');
-    }
-}
-
-/* ── Auto-run on page load ─────────────────────────────────────────────────── */
-window.addEventListener('DOMContentLoaded', ()=>{ autoLoad(); });
-
 
 function populateDates(){
     setLoading(true,'Building dates…');
@@ -1167,7 +1153,7 @@ function pnlRowExcel(r){
 
 function pnlPctRowExcel(r){
     const excelPct=r['GainLoss%'];
-    if(excelPct!==null&&excelPct!==undefined&&String(excelPct).trim()!=='')return parseNum(excelPct)*100;
+    if(excelPct!==null&&excelPct!==undefined&&String(excelPct).trim()!=='')return parseNum(excelPct);
     const entry=parseNum(r['AvgBuyPrice'])||parseNum(r['BuyClPrice']);
     if(entry<=0)return 0;
     if(isClosed(r)){
@@ -1194,11 +1180,9 @@ function renderPager(el,key,total,pages,page){
     el.innerHTML=`<span class="info">${total} rows | Page ${page}/${pages}</span><button onclick="pagerPrev('${key}')">Prev</button><button onclick="pagerNext('${key}', ${pages})">Next</button><select onchange="pagerSize('${key}', this.value)"><option value="50" ${pageState[key].size==50?'selected':''}>50</option><option value="100" ${pageState[key].size==100?'selected':''}>100</option><option value="200" ${pageState[key].size==200?'selected':''}>200</option><option value="500" ${pageState[key].size==500?'selected':''}>500</option></select>`
 }
 
-const TAB_RENDER_MAP={calls:()=>renderCalls(),ledger:()=>renderLedger(),holding:()=>renderHolding(),closed:()=>renderClosed(),avgTrigger:()=>renderAvgBuyTrigger(),sellTrigger:()=>renderSellTrigger(),avgHistory:()=>renderAvgHistory(),forceExit:()=>renderForceExit()};
-function pagerRenderKey(key){if(TAB_RENDER_MAP[key])TAB_RENDER_MAP[key]();else renderAllTablesOnly();}
-function pagerPrev(key){pageState[key].page=Math.max(1,pageState[key].page-1);pagerRenderKey(key);}
-function pagerNext(key,pages){pageState[key].page=Math.min(pages,pageState[key].page+1);pagerRenderKey(key);}
-function pagerSize(key,val){pageState[key].size=parseInt(val,10)||100;pageState[key].page=1;pagerRenderKey(key);}
+function pagerPrev(key){pageState[key].page=Math.max(1,pageState[key].page-1);renderAllTablesOnly()}
+function pagerNext(key,pages){pageState[key].page=Math.min(pages,pageState[key].page+1);renderAllTablesOnly()}
+function pagerSize(key,val){pageState[key].size=parseInt(val,10)||100;pageState[key].page=1;renderAllTablesOnly()}
 
 /* PART 6: TRADE HISTORY RENDERING (FIXED) */
 
@@ -1472,8 +1456,8 @@ function renderCalls(){
         return;
     }
     
-    const freshCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='invalid').length;
-    const openCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='pending').length;
+    const freshCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='pending').length;
+    const openCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='executed'&&String(r['Status']||'').trim().toLowerCase()==='open').length;
     badgeEl.innerHTML=`<span class="badge">Total Calls: ${total}</span><span class="badge green">Fresh: ${freshCount}</span><span class="badge" style="background:#f59e0b; color:#fff;">Open: ${openCount}</span>`;
 
     let html='<table><thead><tr><th>Date</th><th>Stock</th><th>1D%</th><th>5D%</th><th>Buy Price</th><th>LTP</th><th>Target</th><th>SL</th><th>Status</th></tr></thead><tbody>';
@@ -1482,10 +1466,10 @@ function renderCalls(){
         if(buyPrice<=0)continue;
         const ltp=parseNum(r['RecentLTP']||buyPrice);
         const orderStatus=String(r['Order']||'').trim().toLowerCase();
-        const isFresh=orderStatus==='invalid';
+        const isFresh=orderStatus==='pending';
         const statusBtnClass=isFresh?'fresh-call':'open-call';
         const statusText=isFresh?'Fresh Call':'Open Call';
-        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtFracPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtFracPct(r['5DLow%'])</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
+        html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
     }
     html+='</tbody></table>';
     els.callsTable.innerHTML=html
@@ -1514,7 +1498,7 @@ function renderLedger(){
     let html='<table><thead><tr><th>Date</th><th>Stock</th><th>Order</th><th>Status</th><th>Avg Buy</th><th>Qty (₹10k)</th><th>Inv</th><th>LTP</th><th>P&L</th><th>%</th><th>Cum</th></tr></thead><tbody>';
     for(const r of slice){
         const entry=parseNum(r['AvgBuyPrice'])||parseNum(r['BuyClPrice']);
-        const qty=Math.round(10000/entry);
+        const qty=qtyOf(r)>0?qtyOf(r):Math.round(10000/entry);
         const ltp=parseNum(r['RecentLTP']||entry);
         const investment=qty*entry;
         const pnl=pnlRowExcel(r);
@@ -1641,8 +1625,8 @@ function renderSellTrigger(){
         const qty=qtyOf(r);
         const pnl=(ltp-avgBuy)*qty;
         const pnlPct=((ltp-avgBuy)/avgBuy)*100;
-        const triggerPrice=avgBuy*1.20;
-        const targetPrice=avgBuy*1.25;
+        const triggerPrice=parseNum(r['StoplossPrice'])||avgBuy*0.80;
+        const targetPrice=parseNum(r['TargetPrice'])||avgBuy*1.10;
         const distPct=((ltp-triggerPrice)/triggerPrice)*100;
         html+=`<tr><td>${r.StockName}</td><td>${fmtCur(avgBuy)}</td><td class="${colorCls(pnl)}">${fmtCur(ltp)}</td><td class="${colorCls(pnl)}">${fmtCur(pnl)}</td><td class="${colorCls(pnl)}">${pnlPct.toFixed(2)}%</td><td>${fmtCur(triggerPrice)}</td><td style="color:#10b981;font-weight:bold">${fmtCur(targetPrice)}</td><td class="green">${distPct.toFixed(2)}%</td><td><span class="badge" style="background:#ef4444; color:#fff">SELL SIGNAL</span></td></tr>`;
     });
@@ -2176,7 +2160,7 @@ function renderAllTablesOnly(){
     renderHolding();
     renderClosed();
     renderDailyLedger();
-    if(!document.getElementById('tradeHistory').classList.contains('hidden')) renderTradeHistory();
+    renderTradeHistory();
     renderAvgBuyTrigger();
     renderSellTrigger();
     renderAvgHistory();
@@ -2224,16 +2208,12 @@ async function exportImage(){
         return;
     }
 
-    // Standard Table Logic: Export ALL rows regardless of pagination
-    // Temporarily expand to show all rows, capture, then restore
-    const activeTabKey = document.querySelector('.tab.active')?.dataset?.tab;
-    const pagerKey = {calls:'calls',ledger:'ledger',holding:'holding',closed:'closed',avgTrigger:'avgTrigger',sellTrigger:'sellTrigger',avgHistory:'avgHistory',forceExit:'forceExit'}[activeTabKey];
-    let savedSize=null, savedPage=null;
-    if(pagerKey && pageState[pagerKey]){savedSize=pageState[pagerKey].size;savedPage=pageState[pagerKey].page;pageState[pagerKey].size=99999;pageState[pagerKey].page=1;if(TAB_RENDER_MAP[pagerKey])TAB_RENDER_MAP[pagerKey]();}
+    // Standard Table Logic: Fixed Size Pagination
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     const badgesHTML = tabEl.querySelector('.badges') ? tabEl.querySelector('.badges').outerHTML : '';
     const theadHTML = table.querySelector('thead').outerHTML;
     
+    // Remove scroll for accurate row reading if needed, though clone is safer
     const totalPages = Math.ceil(rows.length / EXPORT_CONFIG.rowsPerPage);
 
     setLoading(true, `Generating ${totalPages} images...`);
@@ -2311,7 +2291,6 @@ async function exportImage(){
         console.error(e);
         showToast('Image export failed', 'error');
     } finally {
-        if(savedSize!==null&&pagerKey&&pageState[pagerKey]){pageState[pagerKey].size=savedSize;pageState[pagerKey].page=savedPage;if(TAB_RENDER_MAP[pagerKey])TAB_RENDER_MAP[pagerKey]();}
         setLoading(false);
     }
 }
@@ -2341,11 +2320,7 @@ async function exportPDF(){
         return;
     }
 
-    // Standard Table Logic: Export ALL rows regardless of pagination
-    const exportTabKey = document.querySelector('.tab.active')?.dataset?.tab;
-    const exportPagerKey = {calls:'calls',ledger:'ledger',holding:'holding',closed:'closed',avgTrigger:'avgTrigger',sellTrigger:'sellTrigger',avgHistory:'avgHistory',forceExit:'forceExit'}[exportTabKey];
-    let pdfSavedSize=null, pdfSavedPage=null;
-    if(exportPagerKey && pageState[exportPagerKey]){pdfSavedSize=pageState[exportPagerKey].size;pdfSavedPage=pageState[exportPagerKey].page;pageState[exportPagerKey].size=99999;pageState[exportPagerKey].page=1;if(TAB_RENDER_MAP[exportPagerKey])TAB_RENDER_MAP[exportPagerKey]();}
+    // Standard Table Logic: Page Breaks every 10 rows
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     const badgesHTML = tabEl.querySelector('.badges') ? tabEl.querySelector('.badges').outerHTML : '';
     const theadHTML = table.querySelector('thead').outerHTML;
@@ -2366,7 +2341,6 @@ async function exportPDF(){
             const slice = rows.slice(p * EXPORT_CONFIG.rowsPerPage, (p + 1) * EXPORT_CONFIG.rowsPerPage);
 
             const pageDiv = document.createElement('div');
-            pageDiv.className = 'pdf-page';
             // A4 Dimensions approx 297mm height. Padding 15mm on top/bottom = 267mm content area.
             pageDiv.style.width = '210mm';
             // We don't set fixed height here so content can flow, but we split manually.
@@ -2397,7 +2371,7 @@ async function exportPDF(){
             image: { type: 'jpeg', quality: 0.98 },
             html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            pagebreak: { mode: ['legacy', 'css', 'avoid-all'] } // Respect page-break-after on .pdf-page
+            pagebreak: { mode: 'css', before: '.pdf-page' } // Respect manual breaks
         };
 
         await html2pdf().set(opt).from(wrapper).save();
@@ -2408,7 +2382,6 @@ async function exportPDF(){
         showToast('PDF export failed', 'error');
     } finally {
         if(document.body.contains(wrapper)) document.body.removeChild(wrapper);
-        if(pdfSavedSize!==null&&exportPagerKey&&pageState[exportPagerKey]){pageState[exportPagerKey].size=pdfSavedSize;pageState[exportPagerKey].page=pdfSavedPage;if(TAB_RENDER_MAP[exportPagerKey])TAB_RENDER_MAP[exportPagerKey]();}
         setLoading(false);
     }
 }
