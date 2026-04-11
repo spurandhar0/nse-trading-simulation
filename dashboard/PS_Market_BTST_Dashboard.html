@@ -176,17 +176,15 @@ footer span{color:rgba(255,255,255,.85);font-weight:700;}
       </div>
     </div>
     <div class="hdr-right">
-      <div class="hdr-badge" id="fileInfo">No file loaded</div>
-      <label class="hdr-btn">
-        ⬆ Upload Excel
-        <input id="file" type="file" accept=".xlsx,.xls,.xlsm,.XLSX,.XLS,.XLSM" hidden>
-      </label>
+      <div class="hdr-badge" id="fileInfo">Loading data...</div>
+      <div id="lastRunBadge" class="hdr-badge" style="display:none;"></div>
+      <input id="file" type="file" accept=".xlsx,.xls,.xlsm,.XLSX,.XLS,.XLSM" hidden>
     </div>
   </div>
 </header>
 
-<div id="autoLoadBanner" style="display:none;align-items:center;justify-content:center;padding:8px 20px;background:rgba(37,99,235,.08);border-bottom:2px solid #2563eb;font-size:13px;font-weight:600;">
-  <span id="autoLoadText" style="color:#2563eb;">⏳ Auto-loading latest BTST data...</span>
+<div id="autoLoadBanner" style="display:flex;align-items:center;justify-content:center;gap:12px;padding:7px 20px;background:rgba(37,99,235,.08);border-bottom:2px solid #2563eb;font-size:12.5px;font-weight:600;">
+  <span id="autoLoadText" style="color:#2563eb;">⏳ Loading latest BTST data from server...</span>
 </div>
 
 <div class="container">
@@ -201,7 +199,8 @@ footer span{color:rgba(255,255,255,.85);font-weight:700;}
   <button onclick="applyDateRange()" style="padding:6px 13px;font-size:12px;">Apply</button>
   <button onclick="resetDateRange()" style="padding:6px 13px;font-size:12px;background:#64748b;">Reset</button>
   <span id="filterPill" class="pill" style="display:none;margin-left:4px;"></span>
-  <div id="dlGroup" class="export hidden" style="margin-left:auto;">
+  <div id="dlGroup" class="export hidden" style="margin-left:auto;gap:6px;">
+    <button onclick="autoLoadFromGitHubPages()" style="padding:6px 13px;font-size:12px;background:#0891b2;">↻ Refresh</button>
     <button onclick="exportAll()" style="padding:6px 13px;font-size:12px;">Export Excel</button>
     <button onclick="exportCSV()" style="padding:6px 13px;font-size:12px;background:#059669;">Export CSV</button>
   </div>
@@ -237,13 +236,10 @@ footer span{color:rgba(255,255,255,.85);font-weight:700;}
 <!-- PANELS -->
 <div id="overview" class="card">
   <div id="noDataBanner" style="text-align:center;padding:40px 20px;display:block;">
-    <div style="font-size:48px;margin-bottom:12px;">📊</div>
-    <div style="font-size:18px;font-weight:800;color:var(--navy);margin-bottom:8px;">No Data Loaded</div>
-    <div style="font-size:13px;color:var(--text3);margin-bottom:20px;">Upload your QuickRun Excel file to see your BTST trading dashboard</div>
-    <label class="hdr-btn" style="display:inline-flex;cursor:pointer;">
-      ⬆ Upload Excel
-      <input type="file" accept=".xlsx,.xls,.xlsm" hidden onchange="document.getElementById('file').dispatchEvent(new Event('change'));this.files[0]&&(document.getElementById('file').files=this.files)">
-    </label>
+    <div style="font-size:48px;margin-bottom:12px;">⏳</div>
+    <div style="font-size:18px;font-weight:800;color:var(--navy);margin-bottom:8px;">Loading Data...</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:4px;">Fetching latest BTST signals from server</div>
+    <div style="font-size:11px;color:var(--text3);">If this persists, the workflow may not have run yet today</div>
   </div>
   <div id="overviewStats" class="stat-grid" style="display:none;"></div>
   <div class="chart-box" id="cumChartBox" style="display:none;"><canvas id="cumChart"></canvas></div>
@@ -414,18 +410,24 @@ const pageState={calls:{page:1,size:100},ledger:{page:1,size:100},holding:{page:
 // When dashboard is opened on GitHub Pages, automatically load latest_quickrun.xlsx
 // Falls back gracefully when opened locally (file:// protocol)
 async function autoLoadFromGitHubPages() {
-    // Only auto-fetch when served over HTTP/HTTPS (not local file://)
-    if (window.location.protocol === 'file:') return;
+    // Reset state for re-run
+    const banner = document.getElementById('autoLoadBanner');
+    if (banner) {
+        banner.style.display = 'flex';
+        banner.style.background = 'rgba(37,99,235,.08)';
+        banner.style.borderColor = '#2563eb';
+        banner.querySelector('#autoLoadText').textContent = '⏳ Loading latest BTST data from server...';
+        banner.querySelector('#autoLoadText').style.color = '#2563eb';
+    }
+    // Show loading state immediately
+    const banner = document.getElementById('autoLoadBanner');
+    if (banner) banner.style.display = 'flex';
 
     const EXCEL_URL = 'latest_quickrun.xlsx';
     const META_URL  = 'meta.json';
 
     // Show auto-loading banner
-    const banner = document.getElementById('autoLoadBanner');
-    if (banner) {
-        banner.style.display = 'flex';
-        banner.querySelector('#autoLoadText').textContent = '⏳ Auto-loading latest BTST data...';
-    }
+
 
     try {
         // Read meta.json first (small file) to get last run time
@@ -492,38 +494,54 @@ async function autoLoadFromGitHubPages() {
         renderAll();
         setLoading(false);
 
+        // Update status bar
         if (banner) {
-            const label = lastRun ? '✅ Auto-loaded — Last run: ' + lastRun + ' IST' : '✅ Data loaded automatically';
+            const label = lastRun ? '✅ Live data — Last run: ' + lastRun + ' IST' : '✅ Data loaded';
             banner.querySelector('#autoLoadText').textContent = label;
-            banner.style.background = 'rgba(16,185,129,0.15)';
-            banner.style.borderColor = '#10b981';
-            banner.querySelector('#autoLoadText').style.color = '#10b981';
-            // Hide banner after 5 seconds
-            setTimeout(() => { banner.style.display = 'none'; }, 5000);
+            banner.style.background = 'rgba(5,150,105,0.12)';
+            banner.style.borderColor = '#059669';
+            banner.querySelector('#autoLoadText').style.color = '#059669';
         }
-
-        // Update file info
+        // Update header badge
         const fileInfo = document.getElementById('fileInfo');
         if (fileInfo) {
-            fileInfo.textContent = '✅ Auto-loaded: latest_quickrun.xlsx' + (lastRun ? ' (' + lastRun + ')' : '');
-            fileInfo.style.color = '#10b981';
+            fileInfo.textContent = lastRun ? '🟢 Live — ' + lastRun : '🟢 Data Loaded';
+            fileInfo.style.background = 'rgba(5,150,105,0.2)';
+            fileInfo.style.borderColor = 'rgba(5,150,105,0.5)';
+        }
+        // Show last run in separate badge
+        const lrBadge = document.getElementById('lastRunBadge');
+        if (lrBadge && lastRun) {
+            lrBadge.textContent = '📅 ' + lastRun;
+            lrBadge.style.display = 'block';
         }
 
     } catch(err) {
         console.warn('Auto-load failed:', err.message);
-        if (banner) {
-            let msg = '⚠️ Auto-load failed — use Upload Excel button';
-            if (err.message.includes('404')) {
-                msg = '⚠️ Data file not found (404) — run the GitHub workflow first, or upload Excel manually';
-            } else if (err.message.includes('fetch')) {
-                msg = '⚠️ Network error — open on GitHub Pages or upload Excel manually';
-            }
-            banner.querySelector('#autoLoadText').textContent = msg;
-            banner.style.background = 'rgba(245,158,11,0.15)';
-            banner.style.borderColor = '#f59e0b';
-            banner.querySelector('#autoLoadText').style.color = '#f59e0b';
-            setTimeout(() => { if(banner) banner.style.display = 'none'; }, 8000);
+        // Update no-data placeholder with error
+        const noDataEl = document.getElementById('noDataBanner');
+        if (noDataEl) {
+            noDataEl.innerHTML = \`
+            <div style="font-size:40px;margin-bottom:12px;">⚠️</div>
+            <div style="font-size:17px;font-weight:800;color:#dc2626;margin-bottom:8px;">Data Not Available</div>
+            <div style="font-size:13px;color:var(--text3);margin-bottom:6px;">\${
+                err.message.includes('404')
+                ? 'No data file found — GitHub workflow needs to run first'
+                : 'Could not load data: ' + err.message
+            }</div>
+            <div style="font-size:11px;color:var(--text3);">
+                Go to Actions → Quick Run → Run workflow (rebuild_db=true)
+            </div>\`;
         }
+        if (banner) {
+            banner.querySelector('#autoLoadText').textContent = '⚠️ Data unavailable — ' + 
+                (err.message.includes('404') ? 'run the workflow first' : err.message);
+            banner.style.background = 'rgba(220,38,38,0.08)';
+            banner.style.borderColor = '#dc2626';
+            banner.querySelector('#autoLoadText').style.color = '#dc2626';
+        }
+        const fileInfo = document.getElementById('fileInfo');
+        if (fileInfo) { fileInfo.textContent = '🔴 No data'; }
     }
 }
 
