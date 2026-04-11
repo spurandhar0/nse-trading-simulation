@@ -444,6 +444,16 @@ tr:hover{
     transition:all 0.2s ease;
 }
 
+.expired-call{
+    background:rgba(148,163,184,0.15);
+    color:#94a3b8;
+    border:1.5px solid #94a3b8;
+    border-radius:6px;
+    padding:4px 10px;
+    font-size:11px;
+    font-weight:700;
+    cursor:default;
+}
 .fresh-call{
     background:linear-gradient(135deg, #10b981, #059669);
     color:#ffffff;
@@ -1014,6 +1024,10 @@ function normalizeDateKey(x){
 function toDateStr(x){return normalizeDateKey(x)}
 function dateLE(a,b){return new Date(a+'T00:00:00')<=new Date(b+'T00:00:00')}
 function predDateKey(r){return normalizeDateKey(r['BuyDate'])}
+function isInvalid(r){return String(r['Order']||'').trim().toLowerCase()==='invalid'}
+function isPending(r){return String(r['Order']||'').trim().toLowerCase()==='pending'}
+function isExpiredRow(r){return String(r['Order']||'').trim().toLowerCase()==='expired'}
+function isExecuted(r){return String(r['Order']||'').trim().toLowerCase()==='executed'}
 function boughtDateKey(r){return normalizeDateKey(r['B0_BoughtDate'])}
 function soldDateKey(r){return normalizeDateKey(r['SoldDate'])}
 function qtyOf(r){const q=parseNum(r['TotalQty']);return q>0?q:0}
@@ -1075,8 +1089,10 @@ function resetDateRange(){
 
 // filteredRows
 function filteredRows(){
-    if(!selectedDate)return allRows;
-    let rows=allRows.filter(r=>{const d=predDateKey(r);return d&&dateLE(d,selectedDate)});
+    // Always exclude Invalid rows from all tabs — they appear only in overview counter
+    const validRows = allRows.filter(r => !isInvalid(r));
+    if(!selectedDate)return validRows;
+    let rows=validRows.filter(r=>{const d=predDateKey(r);return d&&dateLE(d,selectedDate)});
     if(dateRangeActive&&fromDateGlobal&&toDateGlobal){
         rows=rows.filter(r=>{const d=predDateKey(r);return d&&dateLE(fromDateGlobal,d)&&dateLE(d,toDateGlobal)})
     }
@@ -1085,10 +1101,11 @@ function filteredRows(){
 
 // Filter Functions
 function filteredCalls() {
-    // Fresh BTST calls = Pending rows only (buy not yet triggered)
+    // BTST calls = Pending (fresh/not triggered) + Expired (missed trigger window)
+    // Invalid rows are excluded (no data / suspended / delisted)
     return filteredRows().filter(r => {
-        const orderValue = String(r['Order'] || '').trim().toLowerCase();
-        return orderValue === 'pending';
+        const o = String(r['Order'] || '').trim().toLowerCase();
+        return o === 'pending' || o === 'expired';
     });
 }
 
@@ -1207,7 +1224,7 @@ els.file.addEventListener('change',(e)=>{
 function populateDates(){
     setLoading(true,'Building dates…');
     const set=new Set();
-    for(const r of allRows){const d=predDateKey(r);if(d)set.add(d)}
+    for(const r of allRows){if(isInvalid(r))continue;const d=predDateKey(r);if(d)set.add(d)}
     const dates=Array.from(set).sort((a,b)=>new Date(b+'T00:00:00')-new Date(a+'T00:00:00'));
     if(!dates.length){
         els.dateBox.classList.remove('hidden');
@@ -1578,7 +1595,9 @@ function renderCalls(){
     
     const freshCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='pending').length;
     const openCount = rows.filter(r=>String(r['Order']).trim().toLowerCase()==='executed'&&String(r['Status']||'').trim().toLowerCase()==='open').length;
-    badgeEl.innerHTML=`<span class="badge">Total Calls: ${total}</span><span class="badge green">Fresh: ${freshCount}</span><span class="badge" style="background:#f59e0b; color:#fff;">Open: ${openCount}</span>`;
+    const expiredCount2 = rows.filter(r=>isExpiredRow(r)).length;
+    const invalidCount2  = allRows.filter(r=>isInvalid(r)).length;
+    badgeEl.innerHTML=`<span class="badge">Total: ${total}</span><span class="badge green">Fresh Call: ${freshCount}</span><span class="badge" style="background:#f59e0b;color:#fff;">Open: ${openCount}</span><span class="badge" style="background:#94a3b8;color:#fff;">Expired: ${expiredCount2}</span><span class="badge" style="background:#ef4444;color:#fff;">Invalid: ${invalidCount2}</span>`;
 
     let html='<table><thead><tr><th>Date</th><th>Stock</th><th>1D%</th><th>5D%</th><th>Buy Price</th><th>LTP</th><th>Target</th><th>SL</th><th>Status</th></tr></thead><tbody>';
     for(const r of slice){
@@ -1586,9 +1605,10 @@ function renderCalls(){
         if(buyPrice<=0)continue;
         const ltp=parseNum(r['RecentLTP']||buyPrice);
         const orderStatus=String(r['Order']||'').trim().toLowerCase();
-        const isFresh=orderStatus==='pending';
-        const statusBtnClass=isFresh?'fresh-call':'open-call';
-        const statusText=isFresh?'Fresh Call':'Open Call';
+        const isFresh   = orderStatus==='pending';
+        const isExpired2 = orderStatus==='expired';
+        const statusBtnClass = isFresh ? 'fresh-call' : (isExpired2 ? 'expired-call' : 'open-call');
+        const statusText     = isFresh ? 'Fresh Call'  : (isExpired2 ? 'Expired'      : 'Open Call');
         html+=`<tr><td>${toDateStr(r['BuyDate'])}</td><td>${r['StockName']||''}</td><td class="${colorCls(r['1DChange%'])}">${fmtPct(r['1DChange%'])}</td><td class="${colorCls(r['5DLow%'])}">${fmtPct(r['5DLow%'])}</td><td>${fmtCur(buyPrice)}</td><td>${fmtCur(ltp)}</td><td class="green">${fmtCur(parseNum(r['TargetPrice'])||buyPrice*1.10)}</td><td class="red">${fmtCur(parseNum(r['StoplossPrice'])||buyPrice*0.80)}</td><td><button class="status-btn ${statusBtnClass}">${statusText}</button></td></tr>`
     }
     html+='</tbody></table>';
