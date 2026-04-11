@@ -432,15 +432,8 @@ async function autoLoadFromGitHubPages() {
         banner.querySelector('#autoLoadText').textContent = '⏳ Loading latest BTST data from server...';
         banner.querySelector('#autoLoadText').style.color = '#2563eb';
     }
-    // Show loading state immediately
-    const banner = document.getElementById('autoLoadBanner');
-    if (banner) banner.style.display = 'flex';
-
     const EXCEL_URL = 'latest_quickrun.xlsx';
     const META_URL  = 'meta.json';
-
-    // Show auto-loading banner
-
 
     try {
         // Read meta.json first (small file) to get last run time
@@ -553,8 +546,8 @@ async function autoLoadFromGitHubPages() {
             banner.style.borderColor = '#dc2626';
             banner.querySelector('#autoLoadText').style.color = '#dc2626';
         }
-        const fileInfo = document.getElementById('fileInfo');
-        if (fileInfo) { fileInfo.textContent = '🔴 No data'; }
+        const fiEl = document.getElementById('fileInfo');
+        if (fiEl) { fiEl.textContent = '🔴 No data'; }
     }
 }
 
