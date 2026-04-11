@@ -271,16 +271,28 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     last_idx  = len(dates) - 1
 
     # ── INVALID case 1: signal on last available date — no D+1 data ──────────
+    # VBA: stockDict does not have signal date key → "Invalid: No data on signal date"
     if start_idx >= last_idx:
-        return invalid
+        inv1 = dict(invalid)
+        inv1["result_str"] = "Invalid: No data on signal date"
+        return inv1
 
     # ── INVALID case 2: >10 consecutive calendar days gap to next data ────────
-    # Indicates stock suspension, delisting, or extended data gap
+    # VBA: hasDataGap = True → "Invalid: Data gap detected"
     next_avail = pd.Timestamp(dates[start_idx + 1])
     if (next_avail - sig_ts).days > 10:
-        inv = dict(invalid)
-        inv["result_str"] = "Invalid: No consecutive market data for 10+ days"
-        return inv
+        inv2 = dict(invalid)
+        inv2["result_str"] = "Invalid: Data gap detected"
+        return inv2
+
+    # ── INVALID case 3: last data is stale (stock stopped trading) ─────────────
+    # VBA: gapFromLastData > MAX_MISSING_DAYS → "Invalid: Stale data"
+    last_avail_ts = pd.Timestamp(dates[last_idx])
+    today_ts      = pd.Timestamp("today").normalize()
+    if (today_ts - last_avail_ts).days > 10:
+        inv3 = dict(invalid)
+        inv3["result_str"] = "Invalid: Stale data"
+        return inv3
 
     # Prices for target and stop (based on signal_close per VBA logic)
     stop_price   = round(signal_close * (1 - stoploss_pct), 2)
@@ -512,12 +524,18 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
 
     # ── INVALID case 1: signal on last available date ─────────────────────────
     if start_idx >= last_idx:
-        return {"order": "Invalid"}
+        return {"order": "Invalid", "result_str": "Invalid: No data on signal date"}
 
     # ── INVALID case 2: >10 consecutive calendar days gap to next data ────────
     next_avail = pd.Timestamp(dates[start_idx + 1])
     if (next_avail - sig_ts).days > 10:
-        return {"order": "Invalid"}
+        return {"order": "Invalid", "result_str": "Invalid: Data gap detected"}
+
+    # ── INVALID case 3: stale data (stock stopped trading) ───────────────────
+    last_avail_ts2 = pd.Timestamp(dates[last_idx])
+    today_ts2      = pd.Timestamp("today").normalize()
+    if (today_ts2 - last_avail_ts2).days > 10:
+        return {"order": "Invalid", "result_str": "Invalid: Stale data"}
 
     stop_price   = round(signal_close * (1 - stoploss_pct), 2)
     target_price = round(signal_close * (1 + target_pct),  2)
@@ -1079,7 +1097,7 @@ def _simulate_sym_group(args):
             "sold_high": None, "sold_low": None, "sold_close": None,
             "buys": [], "had_buy_chance": False,
         }
-        return [invalid] * len(sigs)
+        return [dict(invalid)] * len(sigs)
 
     _mb, _bd, _tgt, _sl, _mdur, _inv, _fecd, _pw, _gld = params
     pd_local = {sym_key: sym_pd_data}
