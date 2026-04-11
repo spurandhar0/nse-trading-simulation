@@ -784,6 +784,15 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     # BuyClPrice — the signal-day close price
     buy_cl_price = round(float(sig["SIGNAL_CLOSE"]), 2)
 
+    # BuyChance — VBA: "Buy Chance" if recent LTP <= signal close price
+    # (= current price is still at or below original entry signal → still a buying opportunity)
+    # VBA: `If CDbl(ltp) <= signalPrice Then buyChanceValue = "Buy Chance"`
+    # Applied to all non-Invalid rows (Pending, Expired, Executed-Open, Executed-Closed)
+    if order != "Invalid" and recent_ltp is not None and recent_ltp <= buy_cl_price:
+        buy_chance_val = "Buy Chance"
+    else:
+        buy_chance_val = None
+
     # Unrealized P&L for Open trades (computed using recent_ltp)
     profit   = sim["profit"]
     gain_pct = sim["gain_pct"]
@@ -798,7 +807,7 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
         float(sig["PCT_1D_CHANGE"]),           # 1DChange%  (decimal fraction)
         sym,                                    # StockName
         float(sig["PCT_FROM_LOW"]),             # 5DLow%     (decimal fraction)
-        round(float(sig["MIN_5D_CLOSE"]), 2),  # 5DLowPrice
+        round(float(sig["MIN_5D_LOW"]), 2),    # 5DLowPrice (min LOW_PRICE over lookback)
         recent_ltp,                             # RecentLTP
         buy_date,                               # BuyDate (datetime)
         buy_cl_price,                           # BuyClPrice
@@ -819,7 +828,7 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
         sim["result_str"],                      # Result
         sim["exit_type"],                       # ExitType
         sim["action"],                          # Action
-        sim["buy_chance"],                      # BuyChance
+        buy_chance_val,                         # BuyChance (VBA: recent_ltp <= signal_close)
         sold_date,                              # SoldDate (datetime)
         sim["exit_price"],                      # SoldPrice
         sim["sold_prev_close"],                 # SoldPrevClose

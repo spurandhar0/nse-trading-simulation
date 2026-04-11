@@ -10,7 +10,9 @@ Modes:
 Applies BOTH filters for each configured filter-param combination:
 
   Filter 1 (5-day dip):
-    pct_from_low = (close - min_5day_close) / min_5day_close
+    pct_from_low = (close - min_5day_LOW) / min_5day_LOW
+    Uses LOW_PRICE (intraday low) for the 5-day lookback minimum — matches VBA ScanSymbolArray.
+    Today's close is CLOSE_PRICE; lookback minimum is min(LOW_PRICE) over previous N days.
     PASS: pct_min <= pct_from_low <= pct_max   (both negative, e.g. -0.10 to -0.05)
 
   Filter 2 (ATH distance):
@@ -67,9 +69,14 @@ def filter_symbol(sym_df, ath_price, days_back, pct_min, pct_max,
     Apply both filters to a single symbol's price history.
     Returns list of dicts for each passing signal day.
     """
-    arr    = sym_df[["DATE1", "CLOSE_PRICE"]].values  # shape (N, 2)
+    # BUG FIX: VBA uses LOW_PRICE for 5-day lookback minimum (a(j,2) in ScanSymbolArray),
+    # not CLOSE_PRICE. The VBA BuildSymbolDict stores LOW_PRICE at index 2 of each row
+    # (from LoadMonthlyDataToArray: outArr(r,3) = tmp(i,7) = col G = LOW_PRICE).
+    # Today's close is still CLOSE_PRICE (a(i,3) in VBA).
+    arr    = sym_df[["DATE1", "CLOSE_PRICE", "LOW_PRICE"]].values  # shape (N, 3)
     dates  = arr[:, 0]
     closes = arr[:, 1].astype(float)
+    lows   = arr[:, 2].astype(float)
     n      = len(dates)
     results = []
 
@@ -83,13 +90,14 @@ def filter_symbol(sym_df, ath_price, days_back, pct_min, pct_max,
             continue
 
         # --- Filter 1: N-day dip (days_back previous trading sessions) ---
-        lookback = closes[i - days_back: i]
-        if len(lookback) < days_back:
+        # VBA uses LOW_PRICE for the lookback minimum (not CLOSE_PRICE)
+        lookback_lows = lows[i - days_back: i]
+        if len(lookback_lows) < days_back:
             continue
-        min_close = np.min(lookback)
-        if min_close <= 0:
+        min_low = np.min(lookback_lows)
+        if min_low <= 0:
             continue
-        pct_from_low = (today_close - min_close) / min_close
+        pct_from_low = (today_close - min_low) / min_low
 
         if not (pct_min <= pct_from_low <= pct_max):
             continue
@@ -99,11 +107,11 @@ def filter_symbol(sym_df, ath_price, days_back, pct_min, pct_max,
         if not (ath_min <= pct_from_ath <= ath_max):
             continue
 
-        # Min-close date
-        min_idx  = i - days_back + int(np.argmin(lookback))
+        # Date of 5-day minimum LOW (for 5DLowDate column)
+        min_idx  = i - days_back + int(np.argmin(lookback_lows))
         min_date = dates[min_idx]
 
-        # Previous close for 1-day change
+        # Previous close for 1-day change (VBA: a(i-1, 3) = CLOSE_PRICE)
         prev_close    = closes[i - 1] if i > 0 else 0
         pct_from_prev = ((today_close - prev_close) / prev_close) if prev_close > 0 else 0
 
@@ -111,7 +119,7 @@ def filter_symbol(sym_df, ath_price, days_back, pct_min, pct_max,
             "SYMBOL":        sym_df["SYMBOL"].iloc[0],
             "SIGNAL_DATE":   sig_date,
             "SIGNAL_CLOSE":  today_close,
-            "MIN_5D_CLOSE":  min_close,
+            "MIN_5D_LOW":    min_low,       # min LOW_PRICE over lookback (renamed from MIN_5D_CLOSE)
             "MIN_5D_DATE":   min_date,
             "PCT_FROM_LOW":  round(pct_from_low,  6),
             "PCT_FROM_ATH":  round(pct_from_ath,  6),
@@ -182,7 +190,7 @@ def main():
     symbol_filter = resolve_symbols(args.symbols, cfg, mode)
 
     print("Loading EQ data...")
-    eq = pd.read_parquet(EQ_FILE, columns=["SYMBOL", "DATE1", "CLOSE_PRICE"])
+    eq = pd.read_parquet(EQ_FILE, columns=["SYMBOL", "DATE1", "CLOSE_PRICE", "LOW_PRICE"])
     eq["DATE1"] = pd.to_datetime(eq["DATE1"])
     eq.sort_values(["SYMBOL", "DATE1"], inplace=True)
 
@@ -234,7 +242,7 @@ def main():
     print(f"\nTotal signals found: {len(all_signals):,}")
 
     EMPTY_COLS = [
-        "SYMBOL","SIGNAL_DATE","SIGNAL_CLOSE","MIN_5D_CLOSE","MIN_5D_DATE",
+        "SYMBOL","SIGNAL_DATE","SIGNAL_CLOSE","MIN_5D_LOW","MIN_5D_DATE",
         "PCT_FROM_LOW","PCT_FROM_ATH","PCT_1D_CHANGE","ATH_PRICE",
         "DAYSBACK","PCTMIN","PCTMAX","ATHMIN","ATHMAX"
     ]
