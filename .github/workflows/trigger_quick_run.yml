@@ -1,26 +1,27 @@
 name: Trigger Quick Run Now
-
 on:
   push:
-    paths:
-      - '.github/workflows/trigger_quick_run.yml'
-
+    branches: [main]
+  workflow_dispatch:
 jobs:
   trigger:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
-      - name: Trigger quick_run workflow
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'quick_run.yml',
-              ref: 'main',
-              inputs: {
-                rebuild_db: 'false',
-                symbols: ''
-              }
-            });
-            console.log('✅ Quick run workflow triggered');
+    - name: Trigger quick_run workflow
+      uses: actions/github-script@v7
+      with:
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'quick_run.yml',
+            ref: 'main',
+            inputs: {
+              rebuild_db: 'false',
+              symbols: ''
+            }
+          });
+          console.log('✅ Quick run workflow triggered');
