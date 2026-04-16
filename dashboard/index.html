@@ -606,6 +606,11 @@ function parseDateFromExcel(dateValue) {
 }
 
 function normalizeDateKey(x){
+    if(!x) return null;
+    const s = String(x).trim();
+    // DD-MM-YYYY format (your Excel format e.g. 13-04-2026)
+    const m = s.match(/^(\d{1,2})-(\d{2})-(\d{4})$/);
+    if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
     return parseDateFromExcel(x);
 }
 
