@@ -417,6 +417,8 @@ footer span{color:rgba(255,255,255,.85);font-weight:700;}
 
 <script>
 let wb=null,allRows=[],selectedDate='',charts={};
+let dateRangeActive=false,fromDateGlobal=null,toDateGlobal=null;
+let stockHistoryData={};
 const pageState={calls:{page:1,size:100},ledger:{page:1,size:100},holding:{page:1,size:100},closed:{page:1,size:100},avgTrigger:{page:1,size:100},sellTrigger:{page:1,size:100},avgHistory:{page:1,size:100},forceExit:{page:1,size:100}};
 
 // ── AUTO-FETCH from GitHub Pages ──────────────────────────────────────────
