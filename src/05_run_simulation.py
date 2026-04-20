@@ -317,8 +317,22 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
     # BUG FIX: was range(start_idx+1, last_idx) — excluded the final data point.
     # That caused buy/exit triggers on the last day to be missed (e.g. RecentLTP
     # already below BuyClPrice yet Status=Pending).  Now includes every day.
+    prev_date_ts = pd.Timestamp(dates[start_idx])  # track previous data date for mid-period gap check
     for i in range(start_idx + 1, len(dates)):
         curr_ts  = pd.Timestamp(dates[i])
+
+        # ── BUG FIX: Mid-period data gap detection (matches VBA logic) ───────
+        # VBA scans consecutiveMissingDays throughout entire holding period.
+        # If gap between any two consecutive data points > 10 calendar days
+        # after first buy, mark Invalid: Data gap detected.
+        if buy_count > 0 and (curr_ts - prev_date_ts).days > 10:
+            return {
+                **invalid,
+                "order":      "Invalid",
+                "result_str": "Invalid: Data gap detected",
+            }
+        prev_date_ts = curr_ts
+
         low_px   = float(lows[i])
         high_px  = float(highs[i])
         close_px = float(closes[i])
@@ -552,8 +566,14 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     exit_price       = 0.0
     exit_date        = None
 
+    prev_date_ts2 = pd.Timestamp(dates[start_idx])  # track previous data date for mid-period gap check
     for i in range(start_idx + 1, len(dates)):   # BUG FIX: include last data point
         curr_ts  = pd.Timestamp(dates[i])
+
+        # ── BUG FIX: Mid-period data gap detection (matches VBA logic) ───────
+        if buy_count > 0 and (curr_ts - prev_date_ts2).days > 10:
+            return {"order": "Invalid", "result_str": "Invalid: Data gap detected"}
+        prev_date_ts2 = curr_ts
         low_px   = float(lows[i])
         high_px  = float(highs[i])
         close_px = float(closes[i])
