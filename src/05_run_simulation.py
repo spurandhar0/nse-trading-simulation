@@ -107,11 +107,13 @@ def build_trade_combos(cfg, mode):
     if mode == "quick":
         q = cfg["quick_run"]
         return [(q["max_buys"], q["buy_drop"], q["target"],
-                 q["stoploss"],  q["max_duration"])]
+                 q["stoploss"],  q["max_duration"],
+                 q.get("use_stoploss", True), q.get("use_target", True))]
     t = cfg["param_sweep"]["trade"]
     return list(itertools.product(
         t["max_buys"], t["buy_drop"], t["target"],
-        t["stoploss"], t["max_duration"]
+        t["stoploss"], t["max_duration"],
+        t.get("use_stoploss", [True]), t.get("use_target", [True])
     ))
 
 
@@ -220,7 +222,8 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
                              max_buys, buy_drop, target_pct, stoploss_pct,
                              max_duration, investment_per_buy,
                              force_exit_calendar_days, pending_window_days,
-                             global_last_date=None):
+                             global_last_date=None,
+                             use_stoploss=True, use_target=True):
     """
     Simulate one trade and return all per-trade details for the picks sheet.
 
@@ -370,14 +373,14 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
 
             # ── Check exits (only on non-buy days — same-day sell not allowed) ─
             if not is_buy_day:
-                if low_px <= stop_price:
+                if use_stoploss and low_px <= stop_price:
                     exit_found = True
                     exit_price = stop_price
                     exit_type  = "Stoploss Triggered"
                     exit_date  = curr_ts
                     exit_idx   = i
                     break
-                if high_px >= target_price:
+                if use_target and high_px >= target_price:
                     exit_found = True
                     exit_price = target_price
                     exit_type  = "Target Achieved"
@@ -517,7 +520,8 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
                    max_buys, buy_drop, target_pct, stoploss_pct,
                    max_duration, investment_per_buy,
                    force_exit_calendar_days, pending_window_days,
-                   global_last_date=None):
+                   global_last_date=None,
+                   use_stoploss=True, use_target=True):
     """Lightweight simulation for full-mode parameter sweep aggregate stats."""
     if sym not in price_dict:
         return {"order": "Invalid"}
@@ -595,10 +599,10 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
                 market_days += 1
             cal_days = (curr_ts - first_buy_date).days if first_buy_date else 0
             if not is_buy_day:
-                if low_px <= stop_price:
+                if use_stoploss and low_px <= stop_price:
                     exit_found = True; exit_price = stop_price
                     exit_type  = "Stoploss Triggered"; exit_date = curr_ts; break
-                if high_px >= target_price:
+                if use_target and high_px >= target_price:
                     exit_found = True; exit_price = target_price
                     exit_type  = "Target Achieved"; exit_date = curr_ts; break
                 if market_days >= max_duration:
@@ -1119,7 +1123,7 @@ def _simulate_sym_group(args):
         }
         return [dict(invalid)] * len(sigs)
 
-    _mb, _bd, _tgt, _sl, _mdur, _inv, _fecd, _pw, _gld = params
+    _mb, _bd, _tgt, _sl, _mdur, _inv, _fecd, _pw, _gld, _use_sl, _use_tgt = params
     pd_local = {sym_key: sym_pd_data}
     results = []
     for s in sigs:
@@ -1127,6 +1131,7 @@ def _simulate_sym_group(args):
             sym_key, s.SIGNAL_DATE, float(s.SIGNAL_CLOSE), pd_local,
             _mb, _bd, _tgt, _sl, _mdur, _inv, _fecd, _pw,
             global_last_date=_gld,
+            use_stoploss=_use_sl, use_target=_use_tgt,
         )
         results.append(sim)
     return results
@@ -1227,6 +1232,8 @@ def main():
         tgt  = q["target"]
         sl   = q["stoploss"]
         mdur = q["max_duration"]
+        use_sl  = q.get("use_stoploss", True)
+        use_tgt = q.get("use_target",   True)
 
         print(f"Parameters      : DaysBack={q['days_back']} "
               f"PctMin={q['pct_min']:.0%} PctMax={q['pct_max']:.0%} "
@@ -1248,7 +1255,8 @@ def main():
         # ── Build ordered signal list using itertuples (faster than iterrows) ─
         sim_params = (mb, bd, tgt, sl, mdur,
                       investment_per_buy, force_exit_calendar_days,
-                      pending_window_days, last_data_date)
+                      pending_window_days, last_data_date,
+                      use_sl, use_tgt)
 
         # Group signals by symbol to pass price_dict entry once per symbol (parallel)
         sym_signal_groups = {}   # sym -> [(signal_date, signal_close, sig_tuple), ...]
@@ -1370,7 +1378,7 @@ def main():
         ))
         total_stocks = len(signal_list)
 
-        for (mb, bd_p, tgt, sl, mdur) in trade_combos:
+        for (mb, bd_p, tgt, sl, mdur, use_sl, use_tgt) in trade_combos:
             test_num += 1
 
             results = [
@@ -1379,6 +1387,7 @@ def main():
                     mb, bd_p, tgt, sl, mdur,
                     investment_per_buy, force_exit_calendar_days, pending_window_days,
                     global_last_date=last_data_date,
+                    use_stoploss=use_sl, use_target=use_tgt,
                 )
                 for sym, sig_date, sig_close in signal_list
             ]
