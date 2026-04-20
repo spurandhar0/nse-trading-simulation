@@ -1389,9 +1389,9 @@
     "pct_max": -0.05,
     "ath_min": -0.6,
     "ath_max": -0.3,
-    "max_buys": 2,
-    "buy_drop": 0.05,
-    "target": 0.1,
+    "max_buys": 4,
+    "buy_drop": 0.15,
+    "target": 0.2,
     "stoploss": 0.2,
     "max_duration": 30
   },
