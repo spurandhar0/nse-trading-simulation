@@ -1389,11 +1389,13 @@
     "pct_max": -0.05,
     "ath_min": -0.6,
     "ath_max": -0.3,
-    "max_buys": 4,
+    "max_buys": 5,
     "buy_drop": 0.15,
-    "target": 0.2,
+    "target": 0.20,
     "stoploss": 0.2,
-    "max_duration": 30
+    "max_duration": 30,
+    "use_stoploss": false,
+    "use_target": true
   },
   "_section_param_sweep": "========== MONTHLY PARAMETER SWEEP ==========",
   "_param_sweep_comment": "Arrays of values. Every combination is tested.",
@@ -2836,6 +2838,12 @@
         40,
         50,
         60
+      ],
+      "use_stoploss": [
+        true
+      ],
+      "use_target": [
+        true
       ]
     }
   }
