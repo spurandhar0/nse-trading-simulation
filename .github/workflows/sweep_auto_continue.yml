@@ -1,0 +1,70 @@
+name: Sweep Auto-Continue
+
+# ─── What this does ───────────────────────────────────────────────────────────
+# Whenever the "Monthly Parameter Sweep" workflow finishes (successfully or
+# because it hit the 350-minute timeout), this workflow inspects main. If the
+# checkpoint file output/partial/full_sweep_partial.csv is still there it
+# waits 5 minutes and then re-dispatches the sweep so work continues from where
+# it stopped. The sweep deletes the checkpoint once all 2000 combos are done,
+# which is this workflow's stop signal — no more re-dispatches happen.
+#
+# Net effect: you click "Run workflow" on Monthly Parameter Sweep exactly once,
+# and it loops itself (with a 5 minute pause between attempts) until every
+# combo is finished and the final Results_*.xlsx is produced.
+
+on:
+  workflow_run:
+    workflows: ["Monthly Parameter Sweep (All 2000 Combos)"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  maybe-continue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout main (to read the committed checkpoint)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Does the sweep still have work left?
+        id: check
+        run: |
+          if [ -f output/partial/full_sweep_partial.csv ]; then
+            rows=$(($(wc -l < output/partial/full_sweep_partial.csv) - 1))
+            echo "Checkpoint found with ${rows} completed combos."
+            echo "keep_going=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No checkpoint — sweep already finished."
+            echo "keep_going=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait 5 minutes
+        if: steps.check.outputs.keep_going == 'true'
+        run: |
+          echo "Pausing 5 minutes before re-dispatching the sweep..."
+          sleep 300
+
+      - name: Re-dispatch Monthly Parameter Sweep
+        if: steps.check.outputs.keep_going == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Steps 1-4 are skipped because the cached db/ already has everything
+          # the simulation needs. Only Step 5 runs, and it resumes from the
+          # checkpoint automatically.
+          gh workflow run run_simulation.yml --ref main \
+            -f symbols='' \
+            -f run_consolidate_csv=false \
+            -f run_filter_eq=false \
+            -f run_ath=false \
+            -f run_signals=false \
+            -f run_simulation=true \
+            -f run_consolidate_results=false
+          echo "Re-dispatched. The sweep will pick up from the checkpoint."
