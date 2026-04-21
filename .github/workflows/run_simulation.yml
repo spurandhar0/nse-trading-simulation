@@ -55,7 +55,13 @@ permissions:
 jobs:
   simulate:
     runs-on: ubuntu-latest
-    timeout-minutes: 300    # 5 hours max
+    # GitHub Actions hard-caps jobs at 360 min. We use 350 so the job runs
+    # as long as possible before being killed. The simulation script writes a
+    # resumable checkpoint (output/partial/full_sweep_partial.csv) after every
+    # few combos, so if this job hits the timeout, just re-trigger the workflow
+    # and it will pick up where it left off. The final formatted Excel is only
+    # written once every combo is done.
+    timeout-minutes: 350
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -128,10 +134,17 @@ jobs:
         run: python src/06_consolidate_results.py
 
       # ── Commit all outputs ────────────────────────────────────────────────────
+      # Runs even if a prior step was killed by the timeout so the partial
+      # checkpoint (output/partial/full_sweep_partial.csv) is pushed back to
+      # the repo and the next run can resume from it.
       - name: Commit outputs to repo
+        if: ${{ always() }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add db/ output/
           git diff --cached --quiet || git commit -m "param-sweep: $(date +'%d-%b-%Y %H:%M')"
-          git push
+          # Pull with rebase in case another run pushed in the meantime,
+          # then push. Retry once on transient failure.
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}" || (sleep 5 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}")

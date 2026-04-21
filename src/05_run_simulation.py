@@ -1357,19 +1357,59 @@ def main():
     print(f"Filter combos in signals : {len(filter_groups)}")
     print(f"Total output rows        : {total_expected:,}")
 
-    out_path  = os.path.join(month_dir, f"Results_{ts_str}.xlsx")
+    # ── Resumable checkpoint ──────────────────────────────────────────────────
+    # Partial results are appended to a stable CSV after every combo so that
+    # if the workflow runs out of time (GitHub Actions kills the job at the
+    # timeout), the next run can pick up where the previous one left off.
+    # The final formatted Excel is only written once every combo is done.
+    partial_dir = os.path.join(OUTPUT_DIR, "partial")
+    os.makedirs(partial_dir, exist_ok=True)
+    partial_csv = os.path.join(partial_dir, "full_sweep_partial.csv")
 
-    wb           = Workbook()
-    ws           = wb.active
-    ws.title     = "Data_1"
-    ws.append(COLUMNS_43)
+    done_set = set()
+    if os.path.exists(partial_csv):
+        try:
+            _done_df = pd.read_csv(partial_csv)
+            done_set = set(int(t) for t in _done_df["Test"].tolist())
+            print(
+                f"Resume checkpoint : {len(done_set):,}/{total_expected:,} "
+                f"combos already done, skipping those"
+            )
+            del _done_df
+        except Exception as e:
+            print(f"WARN: could not read partial CSV ({e}); starting fresh")
+            done_set = set()
 
-    test_num      = 0
-    sheet_num     = 1
-    rows_on_sheet = 0
+    if not os.path.exists(partial_csv):
+        pd.DataFrame(columns=COLUMNS_43).to_csv(partial_csv, index=False)
+
+    CHECKPOINT_EVERY = 5
+    pending_rows     = []
+
+    def _flush_pending():
+        if not pending_rows:
+            return
+        pd.DataFrame(pending_rows, columns=COLUMNS_43).to_csv(
+            partial_csv, mode="a", header=False, index=False
+        )
+        pending_rows.clear()
+
+    test_num        = 0
+    done_before     = len(done_set)
+    done_this_run   = 0
+
+    loop_start = datetime.now()
 
     for filter_key, filter_group in filter_groups:
         db, pmin, pmax, amin, amax = filter_key
+
+        # Cheap skip: if every trade combo in this filter group is already done,
+        # just bump test_num and move on without materializing signal_list.
+        block_start = test_num + 1
+        block_end   = test_num + len(trade_combos)
+        if all(t in done_set for t in range(block_start, block_end + 1)):
+            test_num = block_end
+            continue
 
         signal_list = list(zip(
             filter_group["SYMBOL"],
@@ -1380,6 +1420,9 @@ def main():
 
         for (mb, bd_p, tgt, sl, mdur, use_sl, use_tgt) in trade_combos:
             test_num += 1
+
+            if test_num in done_set:
+                continue
 
             results = [
                 simulate_trade(
@@ -1398,19 +1441,64 @@ def main():
             row  = [test_num, db, pmin, pmax, amin, amax, mb, bd_p, tgt, sl, mdur]
             row += [stats[c] for c in COLUMNS_43[11:]]
 
-            if rows_on_sheet >= max_rows_per_sheet:
-                sheet_num    += 1
-                rows_on_sheet = 0
-                ws = wb.create_sheet(title=f"Data_{sheet_num}")
-                ws.append(COLUMNS_43)
+            pending_rows.append(row)
+            done_this_run += 1
 
-            ws.append(row)
-            rows_on_sheet += 1
+            if len(pending_rows) >= CHECKPOINT_EVERY:
+                _flush_pending()
 
-        if test_num % 200 == 0:
-            print(f"  Completed {test_num:,} parameter combos...")
+        if (done_before + done_this_run) % 200 == 0 and done_this_run:
+            elapsed = (datetime.now() - loop_start).total_seconds()
+            rate    = done_this_run / max(elapsed, 1)
+            remaining = total_expected - (done_before + done_this_run)
+            eta_min   = remaining / rate / 60 if rate else 0
+            print(
+                f"  Completed {done_before + done_this_run:,}/{total_expected:,} "
+                f"(this run: {done_this_run:,}, rate: {rate:.2f}/s, "
+                f"ETA: {eta_min:.1f} min)"
+            )
 
-    print(f"\nApplying formatting to {sheet_num} sheet(s)...")
+    _flush_pending()
+
+    total_done = done_before + done_this_run
+    if total_done < total_expected:
+        print(
+            f"\n⏸  Partial run: {total_done:,}/{total_expected:,} "
+            f"combos complete ({done_this_run:,} this run)."
+        )
+        print(f"   Checkpoint : {partial_csv}")
+        print(f"   Re-run the 'Monthly Parameter Sweep' workflow to resume from here.")
+        print(f"   Final Excel will be written once every combo is done.")
+        return
+
+    # ── All combos done → build the final formatted Excel from the CSV ────────
+    print(
+        f"\nAll {total_expected:,} combos complete — assembling final Excel "
+        f"(this run contributed {done_this_run:,})."
+    )
+    out_path = os.path.join(month_dir, f"Results_{ts_str}.xlsx")
+
+    df_all = pd.read_csv(partial_csv)
+    df_all = df_all.drop_duplicates(subset=["Test"], keep="last")
+    df_all = df_all.sort_values("Test").reset_index(drop=True)
+
+    wb            = Workbook()
+    ws            = wb.active
+    ws.title      = "Data_1"
+    ws.append(COLUMNS_43)
+    sheet_num     = 1
+    rows_on_sheet = 0
+
+    for _, r in df_all.iterrows():
+        if rows_on_sheet >= max_rows_per_sheet:
+            sheet_num    += 1
+            rows_on_sheet = 0
+            ws = wb.create_sheet(title=f"Data_{sheet_num}")
+            ws.append(COLUMNS_43)
+        ws.append([r[c] for c in COLUMNS_43])
+        rows_on_sheet += 1
+
+    print(f"Applying formatting to {sheet_num} sheet(s)...")
     for sn in range(1, sheet_num + 1):
         sname = f"Data_{sn}"
         if sname in wb.sheetnames:
@@ -1418,8 +1506,15 @@ def main():
 
     wb.save(out_path)
     print(f"\n✅ Results saved  : {out_path}")
-    print(f"✅ Total rows     : {test_num:,}")
+    print(f"✅ Total rows     : {len(df_all):,}")
     print(f"✅ Sheets used    : {sheet_num}")
+
+    # Success — clear the checkpoint so the next sweep starts fresh.
+    try:
+        os.remove(partial_csv)
+        print(f"🗑  Cleared checkpoint: {partial_csv}")
+    except Exception as e:
+        print(f"WARN: could not remove checkpoint {partial_csv}: {e}")
 
 
 if __name__ == "__main__":
