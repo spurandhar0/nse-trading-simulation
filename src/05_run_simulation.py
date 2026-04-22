@@ -819,7 +819,7 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     # Date fields as Python datetime objects
     buy_date   = _to_dt(sig["SIGNAL_DATE"])
     min5d_date = _to_dt(sig["MIN_5D_DATE"])
-    today_date = last_data_date if order != "Invalid" else None
+    today_date = last_data_date  # always fill TodayDate for all rows including Invalid
     sold_date  = _to_dt(sim["exit_date"]) if sim["exit_found"] else None
 
     # BuyClPrice — the signal-day close price
