@@ -64,11 +64,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-CONFIG_FILE        = "config/simulation_params.json"
-SIGNALS_FILE_FULL  = "db/signals.parquet"
-SIGNALS_FILE_QUICK = "db/signals_quick.parquet"
-EQ_FILE            = "db/eq_data.parquet"
-OUTPUT_DIR         = "output"
+CONFIG_FILE          = "config/simulation_params.json"
+SIGNALS_FILE_FULL    = "db/signals.parquet"
+SIGNALS_FILE_QUICK   = "db/signals_quick.parquet"
+EQ_FILE              = "db/eq_data.parquet"
+SERIES_CHANGED_FILE  = "db/series_changed.parquet"  # symbols that changed away from EQ
+OUTPUT_DIR           = "output"
 
 COLUMNS_43 = [
     "Test", "DAYSBACK", "PCTMIN", "PCTMAX", "ATHMIN", "ATHMAX",
@@ -118,6 +119,22 @@ def build_trade_combos(cfg, mode):
 
 
 # ─── PRICE DATA ───────────────────────────────────────────────────────────────
+
+def load_series_changed_map():
+    """
+    Load the series-changed lookup built by 02_filter_eq.py.
+    Returns dict: { SYMBOL -> "BE" / "BZ" / "SM" / ... }
+    If the file does not exist (02_filter_eq not yet run), returns empty dict.
+    """
+    if not os.path.exists(SERIES_CHANGED_FILE):
+        return {}
+    try:
+        df = pd.read_parquet(SERIES_CHANGED_FILE)
+        return dict(zip(df["SYMBOL"], df["LATEST_SERIES"]))
+    except Exception as e:
+        print(f"WARN: could not read series_changed.parquet ({e}); skipping series check")
+        return {}
+
 
 def build_price_dict(eq_df):
     print("Building price dictionary...")
@@ -256,6 +273,14 @@ def simulate_trade_detailed(sym, signal_date, signal_close, price_dict,
 
     if sym not in price_dict:
         return invalid
+
+    # ── INVALID case 0: symbol's series changed away from EQ ─────────────────
+    # e.g. FAZE3Q was EQ but latest bhav shows SERIES=BE → not tradeable as EQ
+    series_changed_map = price_dict.get("__series_changed__", {})
+    if sym in series_changed_map:
+        inv0 = dict(invalid)
+        inv0["result_str"] = f"Invalid: Series changed from EQ to {series_changed_map[sym]}"
+        return inv0
 
     pd_data  = price_dict[sym]
     dates    = pd_data["dates"]
@@ -525,6 +550,11 @@ def simulate_trade(sym, signal_date, signal_close, price_dict,
     """Lightweight simulation for full-mode parameter sweep aggregate stats."""
     if sym not in price_dict:
         return {"order": "Invalid"}
+
+    # ── INVALID case 0: symbol's series changed away from EQ ─────────────────
+    series_changed_map = price_dict.get("__series_changed__", {})
+    if sym in series_changed_map:
+        return {"order": "Invalid", "result_str": f"Invalid: Series changed from EQ to {series_changed_map[sym]}"}
 
     pd_data  = price_dict[sym]
     dates    = pd_data["dates"]
@@ -819,7 +849,7 @@ def build_picks_row(sig, sim, price_dict, max_buys, last_data_date):
     # Date fields as Python datetime objects
     buy_date   = _to_dt(sig["SIGNAL_DATE"])
     min5d_date = _to_dt(sig["MIN_5D_DATE"])
-    today_date = last_data_date  # always fill TodayDate for all rows including Invalid
+    today_date = last_data_date if order != "Invalid" else None
     sold_date  = _to_dt(sim["exit_date"]) if sim["exit_found"] else None
 
     # BuyClPrice — the signal-day close price
@@ -1210,6 +1240,13 @@ def main():
     if symbol_filter:
         eq_df = eq_df[eq_df["SYMBOL"].isin(symbol_filter)]
     price_dict = build_price_dict(eq_df)
+
+    # Inject series-changed map so simulate functions can generate correct remarks
+    series_changed_map = load_series_changed_map()
+    if series_changed_map:
+        print(f"Series-changed symbols loaded: {len(series_changed_map)} "
+              f"(will be marked Invalid: Series changed from EQ to ...)")
+    price_dict["__series_changed__"] = series_changed_map
 
     # Last data date (= "TodayDate" for non-Invalid rows)
     last_data_ts   = eq_df["DATE1"].max()
