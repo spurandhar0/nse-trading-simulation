@@ -141,8 +141,7 @@ jobs:
             "https://x-access-token:${{ secrets.GH_PAT }}@github.com/spurandhar0/nse-btst-dashboard.git" \
             /tmp/dashboard-repo
 
-          # Copy dashboard HTML
-          cp dashboard/index.html /tmp/dashboard-repo/index.html
+          # index.html is NOT copied — dashboard repo's own index.html is preserved
 
           # Copy latest quickrun Excel
           cp output/latest_quickrun.xlsx /tmp/dashboard-repo/latest_quickrun.xlsx
