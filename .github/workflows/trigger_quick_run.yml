@@ -1,7 +1,5 @@
 name: Trigger Quick Run Now
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 jobs:
   trigger:
