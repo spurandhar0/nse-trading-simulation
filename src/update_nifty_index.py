@@ -1,5 +1,5 @@
 """
-Fetches NIFTY 50 and BANKNIFTY closing prices via yfinance
+Fetches NIFTY 50, BANKNIFTY, SENSEX and NIFTY IT closing prices via yfinance
 and writes nifty_index.json to the path given as argv[1].
 """
 import sys, json, pytz
@@ -41,7 +41,7 @@ data = {
     "indices": []
 }
 
-for t, l in [('^NSEI', 'NIFTY 50'), ('^NSEBANK', 'BANKNIFTY')]:
+for t, l in [('^NSEI', 'NIFTY 50'), ('^NSEBANK', 'BANKNIFTY'), ('^BSESN', 'SENSEX'), ('^CNXIT', 'NIFTY IT')]:
     idx = get_idx(t, l)
     if idx:
         data['indices'].append(idx)
