@@ -1,8 +1,6 @@
 name: Quick Run — Daily BTST Signals
 
 on:
-  schedule:
-    - cron: '15 13 * * 1-5'   # 6:45 PM IST Mon–Fri
   workflow_dispatch:
     inputs:
       symbols:
@@ -57,30 +55,25 @@ jobs:
       - name: Set rebuild flag
         id: flags
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            if [ "${{ steps.cache-db.outputs.cache-hit }}" != "true" ]; then
-              echo "rebuild=true"  >> $GITHUB_OUTPUT
-              echo "ℹ️  Cache miss — rebuilding DB"
-            else
-              echo "rebuild=false" >> $GITHUB_OUTPUT
-              echo "ℹ️  Cache hit — skipping DB rebuild"
-            fi
+          VAL="${{ github.event.inputs.rebuild_db }}"
+          if [ "${{ steps.cache-db.outputs.cache-hit }}" != "true" ]; then
+            echo "rebuild=true"  >> $GITHUB_OUTPUT
+            echo "ℹ️  Cache miss — rebuilding DB"
           else
-            VAL="${{ github.event.inputs.rebuild_db }}"
             echo "rebuild=${VAL:-false}" >> $GITHUB_OUTPUT
-            echo "ℹ️  Manual run — rebuild_db=${VAL:-false}"
+            echo "ℹ️  Cache hit — rebuild_db=${VAL:-false}"
           fi
 
       - name: Step 1 — Consolidate CSVs
-        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
+        if: steps.flags.outputs.rebuild == 'true'
         run: python src/01_consolidate_csv.py
 
       - name: Step 2 — Filter EQ series
-        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
+        if: steps.flags.outputs.rebuild == 'true'
         run: python src/02_filter_eq.py
 
       - name: Step 3 — Find ATH
-        if: steps.flags.outputs.rebuild == 'true' || steps.cache-db.outputs.cache-hit != 'true'
+        if: steps.flags.outputs.rebuild == 'true'
         run: python src/03_find_ath.py
 
       - name: Step 4 — Filter Signals (QUICK mode — always fresh)
@@ -127,7 +120,6 @@ jobs:
         run: |
           if [ ! -f output/latest_quickrun.xlsx ]; then
             echo "❌ output/latest_quickrun.xlsx not found"
-            echo "   Simulation may have produced no signals, or Step 5 failed silently"
             exit 1
           fi
 
@@ -141,21 +133,16 @@ jobs:
             "https://x-access-token:${{ secrets.GH_PAT }}@github.com/spurandhar0/nse-btst-dashboard.git" \
             /tmp/dashboard-repo
 
-          # index.html is NOT copied — dashboard repo's own index.html is preserved
-
-          # Copy latest quickrun Excel
           cp output/latest_quickrun.xlsx /tmp/dashboard-repo/latest_quickrun.xlsx
           echo "✅ Copied latest_quickrun.xlsx ($SIZE)"
 
-          # Disable Jekyll so .xlsx files are served correctly by GitHub Pages
           touch /tmp/dashboard-repo/.nojekyll
 
-          # Write metadata
           echo "{\"last_run\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\"run_number\":${{ github.run_number }},\"size_kb\":\"$SIZE\"}" \
             > /tmp/dashboard-repo/meta.json
 
-
           python src/update_nifty_index.py /tmp/dashboard-repo/nifty_index.json
+
           cd /tmp/dashboard-repo
           git add .
           git diff --cached --quiet || git commit -m \
