@@ -13,8 +13,9 @@ on:
         default: 'true'
         type: choice
         options: ['true', 'false']
-        schedule:
-    - cron: '30 13 * * 1-5'   # Mon–Fri 19:00 IST (13:30 UTC)
+
+  schedule:                              # ✅ same level as workflow_dispatch
+    - cron: '30 13 * * 1-5'             # Mon–Fri 19:00 IST (13:30 UTC)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
