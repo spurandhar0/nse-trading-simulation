@@ -9,10 +9,12 @@ on:
         default: ''
       rebuild_db:
         description: 'Rebuild DB from bhav CSVs?'
-        required: false
-        default: 'false'
+        required: true
+        default: 'true'
         type: choice
         options: ['true', 'false']
+        schedule:
+    - cron: '30 13 * * 1-5'   # Mon–Fri 19:00 IST (13:30 UTC)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
