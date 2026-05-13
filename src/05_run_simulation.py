@@ -1084,6 +1084,164 @@ def style_sheet(ws, mode_label):
     ws.page_setup.fitToHeight = 0
 
 
+# ─── SWEEP EXCEL SAVER (partial OR final) ────────────────────────────────────
+
+def save_sweep_excel(partial_csv, output_dir, max_rows_per_sheet, mode_label,
+                     is_complete, month_dir=None, ts_str=None):
+    """
+    Convert the partial (or complete) CSV checkpoint into a multi-sheet Excel.
+
+    Output: output/full_sweep/full_sweep_{partial|final}_YYYYMMDD_HHMMSS.xlsx
+      - Data_1 .. Data_N sheets (max_rows_per_sheet rows each, 25 000 by default)
+      - Consolidated sheet: TOP 5 WinRate rows from each Data sheet
+
+    If is_complete=True: also copies to output/YYYY-MM/Results_YYYYMMDD.xlsx
+    and deletes the checkpoint CSV so the next sweep starts fresh.
+
+    Returns the path of the saved Excel, or None if the CSV is missing.
+    """
+    import shutil
+
+    if not os.path.exists(partial_csv):
+        print("WARN: partial CSV not found — skipping Excel save")
+        return None
+
+    df_all = pd.read_csv(partial_csv)
+    df_all = df_all.drop_duplicates(subset=["Test"], keep="last")
+    df_all = df_all.sort_values("Test").reset_index(drop=True)
+    total_rows = len(df_all)
+    print(f"Building sweep Excel: {total_rows:,} rows, {max_rows_per_sheet:,}/sheet …")
+
+    # Output folder: output/full_sweep/
+    sweep_dir = os.path.join(output_dir, "full_sweep")
+    os.makedirs(sweep_dir, exist_ok=True)
+
+    now_ts  = datetime.now()
+    now_str = now_ts.strftime("%Y%m%d_%H%M%S")
+    label   = "final" if is_complete else "partial"
+    out_path = os.path.join(sweep_dir, f"full_sweep_{label}_{now_str}.xlsx")
+
+    wb = Workbook()
+    sheet_num     = 1
+    rows_on_sheet = 0
+    sheet_top5    = {}          # sheet_name → list of row-lists for top-5 selection
+
+    ws = wb.active
+    ws.title = "Data_1"
+    ws.append(COLUMNS_43)
+    sheet_top5["Data_1"] = []
+
+    thin = Side(style="thin", color="BFBFBF")
+    bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for _, r in df_all.iterrows():
+        if rows_on_sheet >= max_rows_per_sheet:
+            sheet_num    += 1
+            ws = wb.create_sheet(title=f"Data_{sheet_num}")
+            ws.append(COLUMNS_43)
+            sheet_top5[f"Data_{sheet_num}"] = []
+            rows_on_sheet = 0
+        row_vals = [r.get(c, 0) for c in COLUMNS_43]
+        ws.append(row_vals)
+        sheet_top5[f"Data_{sheet_num}"].append(row_vals)
+        rows_on_sheet += 1
+
+    # Style header of every Data sheet (no per-cell zebra — too slow for 25K rows)
+    now_label = now_ts.strftime("%d-%b-%Y %H:%M")
+    for sn in range(1, sheet_num + 1):
+        sname = f"Data_{sn}"
+        if sname not in wb.sheetnames:
+            continue
+        ws_d = wb[sname]
+        title = (f"NSE Param Sweep — {sname} — "
+                 f"{total_rows:,} rows ({label}) — {now_label}")
+        # Insert merged title row
+        ws_d.insert_rows(1)
+        ws_d.merge_cells(start_row=1, start_column=1,
+                         end_row=1, end_column=len(COLUMNS_43))
+        tc       = ws_d.cell(row=1, column=1)
+        tc.value = title
+        tc.font  = Font(bold=True, size=12, color=WHITE)
+        tc.fill  = PatternFill("solid", fgColor=NAVY)
+        tc.alignment = Alignment(horizontal="center", vertical="center")
+        ws_d.row_dimensions[1].height = 24
+        # Style header row (now row 2 after insert)
+        for ci, col_name in enumerate(COLUMNS_43, 1):
+            cell           = ws_d.cell(row=2, column=ci)
+            cell.font      = Font(bold=True, size=10, color=WHITE)
+            cell.fill      = PatternFill("solid", fgColor=NAVY)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border    = bdr
+        ws_d.row_dimensions[2].height = 18
+        ws_d.freeze_panes = ws_d["A3"]
+        ws_d.auto_filter.ref = (
+            ws_d.cell(row=2, column=1).coordinate + ":" +
+            ws_d.cell(row=2, column=len(COLUMNS_43)).coordinate
+        )
+        for ci in range(1, len(COLUMNS_43) + 1):
+            ws_d.column_dimensions[get_column_letter(ci)].width = 13
+        ws_d.page_setup.orientation = "landscape"
+        ws_d.page_setup.fitToPage   = True
+        ws_d.page_setup.fitToWidth  = 1
+        ws_d.page_setup.fitToHeight = 0
+
+    # ── Consolidated sheet: TOP 5 WinRate rows from each Data sheet ───────────
+    winrate_idx = COLUMNS_43.index("WinRate")
+    ws_cons     = wb.create_sheet(title="Consolidated")
+    cons_cols   = ["SourceSheet"] + COLUMNS_43
+    ws_cons.append(cons_cols)
+
+    all_top5_count = 0
+    for sname, rows in sheet_top5.items():
+        if not rows:
+            continue
+        sorted_rows = sorted(
+            rows,
+            key=lambda x: float(x[winrate_idx]) if x[winrate_idx] is not None else 0,
+            reverse=True
+        )
+        for row in sorted_rows[:5]:
+            ws_cons.append([sname] + list(row))
+            all_top5_count += 1
+
+    # Style Consolidated header
+    for ci, col_name in enumerate(cons_cols, 1):
+        cell           = ws_cons.cell(row=1, column=ci)
+        cell.font      = Font(bold=True, size=10, color=WHITE)
+        cell.fill      = PatternFill("solid", fgColor=NAVY)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border    = bdr
+    ws_cons.row_dimensions[1].height = 18
+    ws_cons.freeze_panes = ws_cons["A2"]
+    ws_cons.auto_filter.ref = (
+        ws_cons.cell(row=1, column=1).coordinate + ":" +
+        ws_cons.cell(row=1, column=len(cons_cols)).coordinate
+    )
+    for ci in range(1, len(cons_cols) + 1):
+        ws_cons.column_dimensions[get_column_letter(ci)].width = 13
+    ws_cons.column_dimensions["A"].width = 15  # SourceSheet
+
+    wb.save(out_path)
+    print(f"✅ Sweep Excel saved : {out_path}")
+    print(f"   Data sheets       : {sheet_num} (≤{max_rows_per_sheet:,} rows each)")
+    print(f"   Consolidated      : {all_top5_count} rows (top 5 per sheet)")
+
+    if is_complete:
+        # Copy as final Results_ file in the monthly folder
+        if month_dir and ts_str:
+            final_path = os.path.join(month_dir, f"Results_{ts_str}.xlsx")
+            shutil.copy2(out_path, final_path)
+            print(f"✅ Final Results     : {final_path}")
+        # Clear checkpoint so next sweep starts fresh
+        try:
+            os.remove(partial_csv)
+            print(f"🗑  Cleared checkpoint: {partial_csv}")
+        except Exception as e:
+            print(f"WARN: could not remove checkpoint {partial_csv}: {e}")
+
+    return out_path
+
+
 # ─── NO-SIGNALS DIAGNOSTIC FILE ──────────────────────────────────────────────
 
 def save_no_signals_file(cfg, mode, mode_label, symbol_filter, signals_file, month_dir, ts_str):
@@ -1497,61 +1655,29 @@ def main():
 
     _flush_pending()
 
-    total_done = done_before + done_this_run
-    if total_done < total_expected:
+    total_done  = done_before + done_this_run
+    is_complete = (total_done >= total_expected)
+
+    # Always save sweep Excel from checkpoint (partial OR complete)
+    sweep_excel = save_sweep_excel(
+        partial_csv, OUTPUT_DIR, max_rows_per_sheet, mode_label,
+        is_complete, month_dir, ts_str
+    )
+
+    if not is_complete:
         print(
             f"\n⏸  Partial run: {total_done:,}/{total_expected:,} "
             f"combos complete ({done_this_run:,} this run)."
         )
         print(f"   Checkpoint : {partial_csv}")
+        if sweep_excel:
+            print(f"   Excel saved: {sweep_excel}")
         print(f"   Re-run the 'Monthly Parameter Sweep' workflow to resume from here.")
-        print(f"   Final Excel will be written once every combo is done.")
         return
 
-    # ── All combos done → build the final formatted Excel from the CSV ────────
-    print(
-        f"\nAll {total_expected:,} combos complete — assembling final Excel "
-        f"(this run contributed {done_this_run:,})."
-    )
-    out_path = os.path.join(month_dir, f"Results_{ts_str}.xlsx")
-
-    df_all = pd.read_csv(partial_csv)
-    df_all = df_all.drop_duplicates(subset=["Test"], keep="last")
-    df_all = df_all.sort_values("Test").reset_index(drop=True)
-
-    wb            = Workbook()
-    ws            = wb.active
-    ws.title      = "Data_1"
-    ws.append(COLUMNS_43)
-    sheet_num     = 1
-    rows_on_sheet = 0
-
-    for _, r in df_all.iterrows():
-        if rows_on_sheet >= max_rows_per_sheet:
-            sheet_num    += 1
-            rows_on_sheet = 0
-            ws = wb.create_sheet(title=f"Data_{sheet_num}")
-            ws.append(COLUMNS_43)
-        ws.append([r[c] for c in COLUMNS_43])
-        rows_on_sheet += 1
-
-    print(f"Applying formatting to {sheet_num} sheet(s)...")
-    for sn in range(1, sheet_num + 1):
-        sname = f"Data_{sn}"
-        if sname in wb.sheetnames:
-            style_sheet(wb[sname], mode_label)
-
-    wb.save(out_path)
-    print(f"\n✅ Results saved  : {out_path}")
-    print(f"✅ Total rows     : {len(df_all):,}")
-    print(f"✅ Sheets used    : {sheet_num}")
-
-    # Success — clear the checkpoint so the next sweep starts fresh.
-    try:
-        os.remove(partial_csv)
-        print(f"🗑  Cleared checkpoint: {partial_csv}")
-    except Exception as e:
-        print(f"WARN: could not remove checkpoint {partial_csv}: {e}")
+    print(f"\n✅ All {total_expected:,} combos complete!")
+    if sweep_excel:
+        print(f"✅ Final Excel    : {sweep_excel}")
 
 
 if __name__ == "__main__":
