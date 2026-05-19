@@ -6,7 +6,7 @@
   "investment_per_buy": 10000,
   "pending_window_days": 5,
   "force_exit_calendar_days": 60,
-  "max_rows_per_sheet": 25000,
+  "max_rows_per_sheet": 50000,
   "_section_quick_run": "========== QUICK RUN (daily) ==========",
   "_quick_run_comment": "Single fixed parameter set. Change these values to update your default daily run.",
   "_watch_symbols_comment": "Specific symbols to run. Empty list [] = ALL EQ symbols. Example: [\"TCS\",\"WIPRO\",\"INFY\"]",
@@ -2777,9 +2777,12 @@
     "filter": {
       "_comment": "Filter ranges. All combinations tested. Invalid combos (min>=max) auto-skipped.",
       "days_back": [
+        5,
         10,
         15,
-        20
+        20,
+        25,
+        30
       ],
       "pct_min": [
         -0.1,
@@ -2791,7 +2794,8 @@
       "pct_max": [
         -0.05,
         -0.04,
-        -0.03
+        -0.03,
+        -0.02
       ],
       "ath_min": [
         -0.6,
@@ -2801,9 +2805,11 @@
         -0.4
       ],
       "ath_max": [
+        -0.45,
         -0.4,
         -0.35,
-        -0.3
+        -0.3,
+        -0.25
       ]
     },
     "trade": {
