@@ -10,8 +10,17 @@ venv/
 db/*.parquet
 db/*.xlsx
 
-# Output (committed selectively)
+# Output — root level (manually generated, not committed)
 output/*.xlsx
+
+# FIX (space): Ignore per-day QuickRun_Picks files to prevent accumulation.
+# Only output/latest_quickrun.xlsx (fixed name, overwrites daily) is kept.
+# If you need a specific day's picks, run the workflow manually.
+output/**/QuickRun_Picks_*.xlsx
+
+# FIX (space): Ignore old-style timestamped partial Excels if any exist.
+# The new partial uses a single fixed filename: full_sweep_partial_latest.xlsx
+output/**/full_sweep_partial_2*.xlsx
 
 # OS
 .DS_Store

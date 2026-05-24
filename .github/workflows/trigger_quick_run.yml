@@ -1,25 +1,29 @@
-name: Trigger Quick Run Now
+name: Trigger Quick Run After Bhavcopy
+
 on:
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["NSE Bhavcopy Fetch"]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Fix: Node.js 24 upgrade (deadline Jun 2, 2026)
+
 jobs:
-  trigger:
+  trigger-quick-run:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
-      contents: read
       actions: write
+
     steps:
-    - name: Trigger quick_run workflow
-      uses: actions/github-script@v7
-      with:
-        script: |
-          await github.rest.actions.createWorkflowDispatch({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            workflow_id: 'quick_run.yml',
-            ref: 'main',
-            inputs: {
-              rebuild_db: 'false',
-              symbols: ''
-            }
-          });
-          console.log('✅ Quick run workflow triggered');
+      - name: Trigger Quick Run workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: 'quick_run.yml',
+              ref: 'main',
+            });
+            console.log('✅ Quick Run triggered after Bhavcopy fetch.');

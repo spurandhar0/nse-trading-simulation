@@ -1,39 +1,56 @@
-name: NSE Bhavcopy Fetch (Daily 6:15PM IST)
+name: NSE Bhavcopy Fetch
 
 on:
   schedule:
-    - cron: "45 12 * * 1-5"   # 6:15 PM IST = 12:45 UTC, Mon-Fri
+    - cron: "30 11 * * 1-5"   # 5:00 PM IST (11:30 UTC) Mon-Fri
   workflow_dispatch:
 
-permissions:
-  contents: write
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Fix: Node.js 24 upgrade (deadline Jun 2, 2026)
 
 jobs:
-  fetch:
+  fetch-bhavcopy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install dependencies
-        run: pip install requests
+        run: pip install -r requirements.txt
 
-      - name: Run NSE Bhavcopy Fetch
-        run: python src/nse_bhavcopy_fetch.py
+      - name: Fetch latest NSE bhavcopy
+        run: python src/01_consolidate_bhavcopy.py
 
-      - name: Commit bhav data to repo
+      - name: Filter EQ series
+        run: python src/02_filter_eq.py
+
+      - name: Compute ATH signals
+        run: python src/03_compute_ath_signals.py
+
+      - name: Generate signals
+        run: python src/04_generate_signals.py
+
+      - name: Commit outputs to repo
+        if: always()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bhav_data/
-          git diff --cached --quiet || git commit -m "auto: NSE bhavcopy $(date +'%d-%b-%Y')"
+          git add -f db/ output/ || true
+          git diff --cached --quiet || git commit -m "chore: update bhavcopy and signals [skip ci]"
           git push

@@ -1,82 +1,57 @@
 name: Sweep Auto-Continue
 
-# FIX 1: GITHUB_TOKEN-triggered workflows do NOT fire workflow_run events
-#         (GitHub security restriction). Solution: use GH_PAT for dispatch.
-# FIX 2: Added 30-minute schedule as fallback in case workflow_run still
-#         doesn't fire. Guard: skip if sweep is already running.
 on:
   workflow_run:
-    workflows: ["Monthly Parameter Sweep (All 2000 Combos)"]
+    workflows: ["Monthly Parameter Sweep"]
     types: [completed]
-  workflow_dispatch:
-  schedule:
-    - cron: '*/30 * * * *'
 
-permissions:
-  contents: read
-  actions: write
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Fix: Node.js 24 upgrade (deadline Jun 2, 2026)
 
 jobs:
-  maybe-continue:
+  check-and-continue:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: read
 
     steps:
-      - name: Checkout main (to read the committed checkpoint)
-        uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Does the sweep still have work left?
+      - name: Check if sweep is complete
         id: check
-        run: |
-          if [ -f output/partial/full_sweep_partial.csv ]; then
-            rows=$(($(wc -l < output/partial/full_sweep_partial.csv) - 1))
-            echo "Checkpoint found with ${rows} completed combos."
-            echo "keep_going=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No checkpoint — sweep already finished."
-            echo "keep_going=false" >> "$GITHUB_OUTPUT"
-          fi
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
 
-      - name: Is the sweep already running? (schedule guard)
-        id: running_check
-        if: steps.check.outputs.keep_going == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
-        run: |
-          in_progress=$(gh api /repos/${{ github.repository }}/actions/workflows/run_simulation.yml/runs \
-            --jq '[.workflow_runs[] | select(.status=="in_progress" or .status=="queued")] | length')
-          echo "Sweep runs in progress/queued: ${in_progress}"
-          if [ "${in_progress}" -gt "0" ]; then
-            echo "already_running=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "already_running=false" >> "$GITHUB_OUTPUT"
-          fi
+            // Check if partial checkpoint CSV exists in the repo
+            try {
+              const { data: content } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: 'output/partial/full_sweep_partial.csv',
+              });
+              // File exists — sweep is NOT complete, trigger another run
+              console.log('Partial CSV found — sweep is not complete. Triggering next run...');
+              core.setOutput('should_continue', 'true');
+            } catch (e) {
+              if (e.status === 404) {
+                console.log('Partial CSV not found — sweep is complete. No re-trigger needed.');
+                core.setOutput('should_continue', 'false');
+              } else {
+                throw e;
+              }
+            }
 
-      - name: Wait 5 minutes before re-dispatching
-        if: |
-          steps.check.outputs.keep_going == 'true' &&
-          steps.running_check.outputs.already_running == 'false'
-        run: |
-          echo "Pausing 5 minutes before re-dispatching the sweep..."
-          sleep 300
-
-      - name: Re-dispatch Monthly Parameter Sweep
-        if: |
-          steps.check.outputs.keep_going == 'true' &&
-          steps.running_check.outputs.already_running == 'false'
-        env:
-          # Use GH_PAT so the dispatched workflow's completion CAN trigger
-          # workflow_run again. GITHUB_TOKEN cannot trigger workflow_run events.
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run run_simulation.yml --ref main \
-            -f symbols='' \
-            -f run_consolidate_csv=false \
-            -f run_filter_eq=false \
-            -f run_ath=false \
-            -f run_signals=false \
-            -f run_simulation=true \
-            -f run_consolidate_results=false
-          echo "Re-dispatched. The sweep will pick up from the checkpoint."
+      - name: Trigger next sweep run
+        if: steps.check.outputs.should_continue == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: 'run_simulation.yml',
+              ref: 'main',
+              inputs: { mode: 'full' },
+            });
+            console.log('✅ Next sweep run triggered.');

@@ -1091,7 +1091,9 @@ def save_sweep_excel(partial_csv, output_dir, max_rows_per_sheet, mode_label,
     """
     Convert the partial (or complete) CSV checkpoint into a multi-sheet Excel.
 
-    Output: output/full_sweep/full_sweep_{partial|final}_YYYYMMDD_HHMMSS.xlsx
+    Partial output: output/full_sweep/full_sweep_partial_latest.xlsx  (fixed name,
+      overwrites on every save — prevents file accumulation in git over many runs)
+    Final output  : output/full_sweep/full_sweep_final_YYYYMMDD_HHMMSS.xlsx
       - Data_1 .. Data_N sheets (max_rows_per_sheet rows each, 25 000 by default)
       - Consolidated sheet: TOP 5 WinRate rows from each Data sheet
 
@@ -1116,10 +1118,16 @@ def save_sweep_excel(partial_csv, output_dir, max_rows_per_sheet, mode_label,
     sweep_dir = os.path.join(output_dir, "full_sweep")
     os.makedirs(sweep_dir, exist_ok=True)
 
-    now_ts  = datetime.now()
-    now_str = now_ts.strftime("%Y%m%d_%H%M%S")
-    label   = "final" if is_complete else "partial"
-    out_path = os.path.join(sweep_dir, f"full_sweep_{label}_{now_str}.xlsx")
+    now_ts = datetime.now()
+    # FIX (space): partial uses a fixed filename (overwrites) to prevent
+    # accumulation of many timestamped files in git across restart cycles.
+    # Final uses a timestamp so each monthly result is archived distinctly.
+    if is_complete:
+        now_str  = now_ts.strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(sweep_dir, f"full_sweep_final_{now_str}.xlsx")
+    else:
+        out_path = os.path.join(sweep_dir, "full_sweep_partial_latest.xlsx")
+    label = "final" if is_complete else "partial"
 
     wb = Workbook()
     sheet_num     = 1
@@ -1331,8 +1339,28 @@ def main():
                         help="quick = per-trade picks sheet (daily); full = aggregate stats (monthly)")
     parser.add_argument("--symbols", default="",
                         help="Comma-separated symbols e.g. TCS,WIPRO,INFY (empty = all)")
+    parser.add_argument("--generate-partial-excel", action="store_true",
+                        help="Only convert checkpoint CSV to partial Excel (no simulation)")
     args = parser.parse_args()
     mode = args.mode
+
+    # ── Fast path: regenerate partial Excel from checkpoint CSV only ──────────
+    # Used by the workflow's pre-commit step to ensure a fresh partial Excel
+    # is always committed even when the simulation step is killed by timeout.
+    if args.generate_partial_excel:
+        cfg = load_config()
+        max_rows_per_sheet = cfg.get("max_rows_per_sheet", 25000)
+        partial_csv = os.path.join(OUTPUT_DIR, "partial", "full_sweep_partial.csv")
+        if not os.path.exists(partial_csv):
+            print("No checkpoint CSV found — skipping partial Excel generation.")
+            return
+        result = save_sweep_excel(
+            partial_csv, OUTPUT_DIR, max_rows_per_sheet,
+            "FULL PARAMETER SWEEP", False, None, None
+        )
+        if result:
+            print(f"✅ Partial Excel generated: {result}")
+        return
 
     signals_file = SIGNALS_FILE_QUICK if mode == "quick" else SIGNALS_FILE_FULL
 
@@ -1589,11 +1617,12 @@ def main():
         )
         pending_rows.clear()
 
-    test_num        = 0
-    done_before     = len(done_set)
-    done_this_run   = 0
+    test_num         = 0
+    done_before      = len(done_set)
+    done_this_run    = 0
 
-    loop_start = datetime.now()
+    loop_start       = datetime.now()
+    _last_excel_save = datetime.now()  # FIX: track last in-process Excel save time
 
     for filter_key, filter_group in filter_groups:
         db, pmin, pmax, amin, amax = filter_key
@@ -1641,6 +1670,17 @@ def main():
 
             if len(pending_rows) >= CHECKPOINT_EVERY:
                 _flush_pending()
+                # FIX (partial output): periodic in-process Excel save every 30 min.
+                # Ensures a fresh partial Excel exists on disk even if the job is
+                # later killed by the GitHub Actions timeout before main() exits.
+                _now = datetime.now()
+                if (_now - _last_excel_save).total_seconds() >= 1800:
+                    print("  [Periodic save] Generating partial Excel from checkpoint…")
+                    save_sweep_excel(
+                        partial_csv, OUTPUT_DIR, max_rows_per_sheet,
+                        mode_label, False, None, None
+                    )
+                    _last_excel_save = _now
 
         if (done_before + done_this_run) % 200 == 0 and done_this_run:
             elapsed = (datetime.now() - loop_start).total_seconds()

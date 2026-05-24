@@ -121,6 +121,20 @@ jobs:
         if: ${{ github.event.inputs.run_simulation == 'true' }}
         run: python src/05_run_simulation.py --mode full --symbols "${{ github.event.inputs.symbols }}"
 
+      # FIX (partial output): Always generate a fresh partial Excel from the
+      # checkpoint CSV before committing — even if Step 5 was killed by the
+      # 350-min timeout. The simulation flushes the checkpoint CSV every 5 combos,
+      # so this step ensures a visible Excel is always present in the repo.
+      - name: Generate partial Excel from checkpoint
+        if: always()
+        run: |
+          if [ -f "output/partial/full_sweep_partial.csv" ]; then
+            echo "Checkpoint CSV found — generating partial Excel..."
+            python src/05_run_simulation.py --generate-partial-excel
+          else
+            echo "No checkpoint CSV — skipping partial Excel generation."
+          fi
+
       - name: Step 6 – Consolidate Result Files
         if: ${{ github.event.inputs.run_consolidate_results == 'true' }}
         run: python src/06_consolidate_results.py
