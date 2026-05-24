@@ -131,12 +131,19 @@ jobs:
           SIZE=$(du -sh output/latest_quickrun.xlsx | cut -f1)
           echo "✅ latest_quickrun.xlsx found — size: $SIZE"
 
+          # Setup SSH deploy key (no PAT needed, no expiry)
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # ✅ --depth 1: shallow clone to avoid growing history download
-          git clone --depth 1 \
-            "https://x-access-token:${{ secrets.GH_PAT }}@github.com/spurandhar0/nse-btst-dashboard.git" \
+          # Shallow clone via SSH — no PAT, no expiry
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/deploy_key" \
+            git clone --depth 1 \
+            git@github.com:spurandhar0/nse-btst-dashboard.git \
             /tmp/dashboard-repo
 
           cp output/latest_quickrun.xlsx /tmp/dashboard-repo/latest_quickrun.xlsx
@@ -153,5 +160,5 @@ jobs:
           git add .
           git diff --cached --quiet || git commit -m \
             "Deploy dashboard — Run #${{ github.run_number }} $(date -u '+%Y-%m-%d %H:%M UTC')"
-          git push origin main
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/deploy_key" git push origin main
           echo "✅ Dashboard deployed → https://spurandhar0.github.io/nse-btst-dashboard/"
