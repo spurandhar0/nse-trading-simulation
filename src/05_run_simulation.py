@@ -1600,8 +1600,10 @@ def main():
             )
             del _done_df
         except Exception as e:
-            print(f"WARN: could not read partial CSV ({e}); starting fresh")
+            print(f"WARN: could not read partial CSV ({e}); truncating and starting fresh")
             done_set = set()
+            # Re-write clean header so stale/mismatched rows don't accumulate
+            pd.DataFrame(columns=COLUMNS_43).to_csv(partial_csv, index=False)
 
     if not os.path.exists(partial_csv):
         pd.DataFrame(columns=COLUMNS_43).to_csv(partial_csv, index=False)
