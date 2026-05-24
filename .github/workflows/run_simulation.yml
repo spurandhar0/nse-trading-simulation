@@ -129,26 +129,7 @@ jobs:
       # bringing the file back to ~1-3MB (one row per unique combo done so far).
       - name: Compact partial CSV checkpoint (remove duplicates)
         if: ${{ github.event.inputs.run_simulation == 'true' }}
-        run: |
-          CSV="output/partial/full_sweep_partial.csv"
-          if [ -f "$CSV" ]; then
-            BEFORE=$(wc -c < "$CSV")
-            python3 - <<'PYEOF'
-import pandas as pd, os
-csv = "output/partial/full_sweep_partial.csv"
-df = pd.read_csv(csv)
-before = len(df)
-df = df.drop_duplicates(subset=["Test"], keep="last").sort_values("Test").reset_index(drop=True)
-df.to_csv(csv, index=False)
-after = len(df)
-size_mb = os.path.getsize(csv) / 1024 / 1024
-print(f"Compacted: {before} → {after} rows  ({size_mb:.1f} MB)")
-PYEOF
-            AFTER=$(wc -c < "$CSV")
-            echo "CSV size: $BEFORE → $AFTER bytes"
-          else
-            echo "No checkpoint CSV — starting fresh."
-          fi
+        run: python src/compact_checkpoint.py
 
       # FIX (partial output): Start a background committer that pushes partial output
       # to the repo every 30 minutes during the simulation run.
