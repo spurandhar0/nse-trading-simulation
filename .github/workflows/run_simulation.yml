@@ -46,7 +46,9 @@ on:
         default: 'false'
         type: choice
         options: ['true', 'false']
-
+  concurrency:
+  group: parameter-sweep
+  cancel-in-progress: true
 permissions:
   contents: write
 
