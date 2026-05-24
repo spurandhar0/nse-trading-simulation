@@ -18,7 +18,7 @@ on:
     - cron: '30 13 * * 1-5'             # Mon–Fri 19:00 IST (13:30 UTC)
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Fix: Node.js 24 upgrade (deadline Jun 2 2026)
 
 jobs:
   quick-run:
@@ -28,12 +28,12 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
