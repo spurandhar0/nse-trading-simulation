@@ -27,12 +27,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-pandas-requests-pytz
           restore-keys: |
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install pandas requests pytz
 
       - name: Fetch latest NSE bhavcopy
         run: python src/01_consolidate_bhavcopy.py
@@ -54,3 +54,4 @@ jobs:
           git add -f db/ output/ || true
           git diff --cached --quiet || git commit -m "chore: update bhavcopy and signals [skip ci]"
           git push
+
