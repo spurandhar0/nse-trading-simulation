@@ -98,19 +98,32 @@ jobs:
             python src/05_run_simulation.py --mode quick
           fi
 
-      - name: Commit output to repo
-        if: steps.sim.outcome == 'success'
-        continue-on-error: true
+      - name: Configure git
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # FIX (push robustness): fetch + rebase with retry to handle concurrent pushes
+      # (e.g. bhavcopy workflow pushing bhav_data/ at the same time).
+      - name: Commit output to repo
+        if: steps.sim.outcome == 'success'
+        continue-on-error: true
+        run: |
           git add "output/"
           git diff --cached --quiet && echo "No new output to commit" && exit 0
 
           git commit -m "quick-run: $(date '+%d-%b-%Y %H:%M IST')"
-          git push origin main
-          echo "✅ Output committed to repo"
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if git rebase origin/main; then
+              git push origin HEAD:main && echo "✅ Push succeeded (attempt $attempt)" && exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            echo "Attempt $attempt failed, retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          echo "⚠️ All push attempts failed"
+          exit 1
 
       - name: Upload output artifacts
         if: always()
