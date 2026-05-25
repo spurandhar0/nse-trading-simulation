@@ -16,11 +16,23 @@ jobs:
       contents: read
 
     steps:
-      - name: Check if sweep is complete
+      - name: Check if sweep is complete and safe to continue
         id: check
         uses: actions/github-script@v7
         with:
           script: |
+            const run = context.payload.workflow_run;
+
+            // FIX (cascade protection): If the triggering run lasted < 5 minutes,
+            // it was an instant failure / cascade — don't re-trigger endlessly.
+            const durationMin = (new Date(run.updated_at) - new Date(run.created_at)) / 60000;
+            console.log(`Triggering run #${run.run_number} lasted ${durationMin.toFixed(1)} min (conclusion: ${run.conclusion})`);
+            if (durationMin < 5) {
+              console.log('Run was too short (<5 min) — looks like an instant failure or cascade. Not re-triggering.');
+              core.setOutput('should_continue', 'false');
+              return;
+            }
+
             // Check if partial checkpoint CSV exists in the repo
             try {
               const { data: content } = await github.rest.repos.getContent({
@@ -41,10 +53,7 @@ jobs:
             }
 
       # FIX: Pass explicit inputs to skip DB rebuild steps (1–4).
-      # Previously passed { mode: 'full' } which is not a valid input and was
-      # silently ignored — causing all steps to run at defaults (rebuild_db=true,
-      # all steps true), wasting 30–60 min rebuilding the DB on every continuation.
-      # Now only Step 5 (simulation) runs; DB steps are skipped (db/ is cached).
+      # Only Step 5 (simulation) runs; DB steps are skipped (db/ is cached).
       - name: Trigger next sweep run
         if: steps.check.outputs.should_continue == 'true'
         uses: actions/github-script@v7
