@@ -74,6 +74,28 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+
+      # Background committer: saves partial output every 10 min throughout ALL steps.
+      # Started early so steps 1-4 progress AND step 5 simulation rows are captured.
+      - name: Start background checkpoint committer
+        run: |
+          nohup bash -c '
+            while true; do
+              sleep 600
+              git add output/ db/ 2>/dev/null || true
+              if ! git diff --cached --quiet 2>/dev/null; then
+                git commit -m "auto-checkpoint: $(date +%H:%M UTC)" 2>/dev/null || true
+                git fetch origin main 2>/dev/null || true
+                git rebase origin/main 2>/dev/null || git rebase --abort 2>/dev/null || true
+                git push origin HEAD:main 2>/dev/null && echo "[bg] pushed at $(date +%H:%M)" || echo "[bg] push failed at $(date +%H:%M)"
+              else
+                echo "[bg] nothing new at $(date +%H:%M)"
+              fi
+            done
+          ' >> /tmp/bg_commit.log 2>&1 &
+          echo $! > /tmp/bg_commit.pid
+          echo "Background committer started (PID: $!) — fires every 10 min"
+
       - name: Restore db/ cache
         id: db-cache
         uses: actions/cache@v4
@@ -131,28 +153,6 @@ jobs:
         if: ${{ github.event.inputs.run_simulation == 'true' }}
         run: python src/compact_checkpoint.py
 
-      # FIX (partial output): Start a background committer that pushes partial output
-      # to the repo every 30 minutes during the simulation run.
-      # This ensures partial output is always in the repo even if the job is killed
-      # by the GitHub Actions 350-min timeout before the final commit step runs.
-      - name: Start background checkpoint committer
-        if: ${{ github.event.inputs.run_simulation == 'true' }}
-        run: |
-          nohup bash -c '
-            while true; do
-              sleep 1800
-              git add output/partial/ output/full_sweep/ 2>/dev/null || true
-              if ! git diff --cached --quiet 2>/dev/null; then
-                git commit -m "auto-checkpoint: $(date +%H:%M UTC)" 2>/dev/null || true
-                git fetch origin main --depth=1 2>/dev/null || true
-                git rebase origin/main 2>/dev/null || git rebase --abort 2>/dev/null || true
-                git push origin HEAD:main 2>/dev/null && echo "[bg] pushed at $(date +%H:%M)" || echo "[bg] push failed at $(date +%H:%M)"
-              fi
-            done
-          ' >> /tmp/bg_commit.log 2>&1 &
-          echo $! > /tmp/bg_commit.pid
-          echo "Background committer started (PID: $!)"
-
       - name: Step 5 – Run Full Parameter Sweep
         if: ${{ github.event.inputs.run_simulation == 'true' }}
         run: python src/05_run_simulation.py --mode full --symbols "${{ github.event.inputs.symbols }}"
@@ -207,3 +207,4 @@ jobs:
           done
           echo "⚠️  All push attempts failed — output remains in runner cache only"
           exit 1
+
