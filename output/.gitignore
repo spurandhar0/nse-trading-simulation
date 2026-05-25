@@ -1,0 +1,10 @@
+# Block dated monthly sweep subdirectories (large XLSX files accumulate over time)
+# e.g. output/2026-05/*.xlsx, output/2026-06/*.xlsx etc.
+[0-9][0-9][0-9][0-9]-[0-9][0-9]/
+
+# Block full_sweep XLSX (keep only partial CSV checkpoint)
+full_sweep/*.xlsx
+full_sweep/*.xls
+
+# Keep latest_quickrun.xlsx (needed by dashboard)
+!latest_quickrun.xlsx
