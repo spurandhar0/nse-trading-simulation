@@ -1099,7 +1099,7 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
       overwrites on every save — prevents file accumulation in git over many runs)
     Final output  : output/full_sweep/full_sweep_final_YYYYMMDD_HHMMSS.xlsx
       - Data_1 .. Data_N sheets (max_rows_per_sheet rows each, 25 000 by default)
-      - Consolidated sheet: TOP 5 WinRate rows from each Data sheet
+      - Consolidated sheet: TOP 20 WinRate rows from each Data sheet
 
     If is_complete=True: also copies to output/YYYY-MM/Results_YYYYMMDD.xlsx
     and deletes all chunk files so the next sweep starts fresh.
@@ -1151,12 +1151,12 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
     wb = Workbook()
     sheet_num     = 1
     rows_on_sheet = 0
-    sheet_top5    = {}          # sheet_name → list of row-lists for top-5 selection
+    sheet_top20    = {}          # sheet_name → list of row-lists for top-20 selection
 
     ws = wb.active
     ws.title = "Data_1"
     ws.append(COLUMNS_43)
-    sheet_top5["Data_1"] = []
+    sheet_top20["Data_1"] = []
 
     thin = Side(style="thin", color="BFBFBF")
     bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -1166,11 +1166,11 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
             sheet_num    += 1
             ws = wb.create_sheet(title=f"Data_{sheet_num}")
             ws.append(COLUMNS_43)
-            sheet_top5[f"Data_{sheet_num}"] = []
+            sheet_top20[f"Data_{sheet_num}"] = []
             rows_on_sheet = 0
         row_vals = [r.get(c, 0) for c in COLUMNS_43]
         ws.append(row_vals)
-        sheet_top5[f"Data_{sheet_num}"].append(row_vals)
+        sheet_top20[f"Data_{sheet_num}"].append(row_vals)
         rows_on_sheet += 1
 
     # Style header of every Data sheet (no per-cell zebra — too slow for 25K rows)
@@ -1212,14 +1212,14 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
         ws_d.page_setup.fitToWidth  = 1
         ws_d.page_setup.fitToHeight = 0
 
-    # ── Consolidated sheet: TOP 5 WinRate rows from each Data sheet ───────────
+    # ── Consolidated sheet: TOP 20 WinRate rows from each Data sheet ───────────
     winrate_idx = COLUMNS_43.index("WinRate")
     ws_cons     = wb.create_sheet(title="Consolidated")
     cons_cols   = ["SourceSheet"] + COLUMNS_43
     ws_cons.append(cons_cols)
 
-    all_top5_count = 0
-    for sname, rows in sheet_top5.items():
+    all_top20_count = 0
+    for sname, rows in sheet_top20.items():
         if not rows:
             continue
         sorted_rows = sorted(
@@ -1227,9 +1227,9 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
             key=lambda x: float(x[winrate_idx]) if x[winrate_idx] is not None else 0,
             reverse=True
         )
-        for row in sorted_rows[:5]:
+        for row in sorted_rows[:20]:
             ws_cons.append([sname] + list(row))
-            all_top5_count += 1
+            all_top20_count += 1
 
     # Style Consolidated header
     for ci, col_name in enumerate(cons_cols, 1):
@@ -1251,7 +1251,7 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
     wb.save(out_path)
     print(f"✅ Sweep Excel saved : {out_path}")
     print(f"   Data sheets       : {sheet_num} (≤{max_rows_per_sheet:,} rows each)")
-    print(f"   Consolidated      : {all_top5_count} rows (top 5 per sheet)")
+    print(f"   Consolidated      : {all_top20_count} rows (top 20 per sheet)")
 
     if is_complete:
         # Copy as final Results_ file in the monthly folder
