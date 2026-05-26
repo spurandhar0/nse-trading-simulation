@@ -58,6 +58,7 @@ import sys
 import json
 import argparse
 import itertools
+import glob
 import pandas as pd
 from datetime import datetime
 from openpyxl import Workbook
@@ -81,6 +82,8 @@ COLUMNS_43 = [
     "Dur5", "Dur10", "Dur15", "Dur20", "Dur25", "Dur30", "Dur35", "Dur40",
     "ExitTGT", "ExitSL", "ExitFEMD", "ExitFECD"
 ]
+
+CHUNK_SIZE = 100_000   # rows per partial chunk file — keeps each file well under GitHub's 100 MB limit
 
 NAVY  = "00203864"
 WHITE = "00FFFFFF"
@@ -1086,11 +1089,12 @@ def style_sheet(ws, mode_label):
 
 # ─── SWEEP EXCEL SAVER (partial OR final) ────────────────────────────────────
 
-def save_sweep_excel(partial_csv, output_dir, max_rows_per_sheet, mode_label,
+def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_label,
                      is_complete, month_dir=None, ts_str=None):
     """
-    Convert the partial (or complete) CSV checkpoint into a multi-sheet Excel.
+    Convert chunk files (or legacy single CSV) into a multi-sheet Excel.
 
+    chunk_files_or_csv: list of chunk CSV paths, or single CSV path string.
     Partial output: output/full_sweep/full_sweep_partial_latest.xlsx  (fixed name,
       overwrites on every save — prevents file accumulation in git over many runs)
     Final output  : output/full_sweep/full_sweep_final_YYYYMMDD_HHMMSS.xlsx
@@ -1098,17 +1102,32 @@ def save_sweep_excel(partial_csv, output_dir, max_rows_per_sheet, mode_label,
       - Consolidated sheet: TOP 5 WinRate rows from each Data sheet
 
     If is_complete=True: also copies to output/YYYY-MM/Results_YYYYMMDD.xlsx
-    and deletes the checkpoint CSV so the next sweep starts fresh.
+    and deletes all chunk files so the next sweep starts fresh.
 
-    Returns the path of the saved Excel, or None if the CSV is missing.
+    Returns the path of the saved Excel, or None if no data found.
     """
     import shutil
 
-    if not os.path.exists(partial_csv):
-        print("WARN: partial CSV not found — skipping Excel save")
+    # Accept either a list of chunk files or a single legacy CSV path
+    if isinstance(chunk_files_or_csv, str):
+        files = [chunk_files_or_csv] if os.path.exists(chunk_files_or_csv) else []
+    else:
+        files = [f for f in chunk_files_or_csv if os.path.exists(f)]
+
+    if not files:
+        print("WARN: no chunk/CSV files found — skipping Excel save")
         return None
 
-    df_all = pd.read_csv(partial_csv)
+    dfs = []
+    for cf in files:
+        try:
+            dfs.append(pd.read_csv(cf))
+        except Exception as e:
+            print(f"  WARN: could not read {cf}: {e}")
+    if not dfs:
+        return None
+
+    df_all = pd.concat(dfs, ignore_index=True)
     df_all = df_all.drop_duplicates(subset=["Test"], keep="last")
     df_all = df_all.sort_values("Test").reset_index(drop=True)
     total_rows = len(df_all)
@@ -1240,12 +1259,13 @@ def save_sweep_excel(partial_csv, output_dir, max_rows_per_sheet, mode_label,
             final_path = os.path.join(month_dir, f"Results_{ts_str}.xlsx")
             shutil.copy2(out_path, final_path)
             print(f"✅ Final Results     : {final_path}")
-        # Clear checkpoint so next sweep starts fresh
-        try:
-            os.remove(partial_csv)
-            print(f"🗑  Cleared checkpoint: {partial_csv}")
-        except Exception as e:
-            print(f"WARN: could not remove checkpoint {partial_csv}: {e}")
+        # Delete all chunk files so next sweep starts fresh
+        for cf in files:
+            try:
+                os.remove(cf)
+                print(f"🗑  Removed chunk: {os.path.basename(cf)}")
+            except Exception as e:
+                print(f"WARN: could not remove {cf}: {e}")
 
     return out_path
 
@@ -1350,12 +1370,17 @@ def main():
     if args.generate_partial_excel:
         cfg = load_config()
         max_rows_per_sheet = cfg.get("max_rows_per_sheet", 25000)
-        partial_csv = os.path.join(OUTPUT_DIR, "partial", "full_sweep_partial.csv")
-        if not os.path.exists(partial_csv):
-            print("No checkpoint CSV found — skipping partial Excel generation.")
+        partial_dir = os.path.join(OUTPUT_DIR, "partial")
+        chunk_files = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+        # Also accept legacy single-CSV for backwards compat
+        legacy_csv = os.path.join(partial_dir, "full_sweep_partial.csv")
+        if not chunk_files and os.path.exists(legacy_csv):
+            chunk_files = [legacy_csv]
+        if not chunk_files:
+            print("No chunk files found — skipping partial Excel generation.")
             return
         result = save_sweep_excel(
-            partial_csv, OUTPUT_DIR, max_rows_per_sheet,
+            chunk_files, OUTPUT_DIR, max_rows_per_sheet,
             "FULL PARAMETER SWEEP", False, None, None
         )
         if result:
@@ -1580,51 +1605,78 @@ def main():
     print(f"Filter combos in signals : {len(filter_groups)}")
     print(f"Total output rows        : {total_expected:,}")
 
-    # ── Resumable checkpoint ──────────────────────────────────────────────────
-    # Partial results are appended to a stable CSV after every combo so that
-    # if the workflow runs out of time (GitHub Actions kills the job at the
-    # timeout), the next run can pick up where the previous one left off.
-    # The final formatted Excel is only written once every combo is done.
+    # ── Resumable checkpoint — chunked CSV files ─────────────────────────────
+    # Results are written to chunk_000001.csv, chunk_000002.csv, … in output/partial/.
+    # Each chunk holds at most CHUNK_SIZE rows (~22 MB) so no file ever exceeds
+    # GitHub's 100 MB hard limit, even with millions of combos.
+    # On resume, all existing chunks are read to rebuild done_set; simulation
+    # skips already-completed test numbers and appends new rows to the current chunk.
     partial_dir = os.path.join(OUTPUT_DIR, "partial")
     os.makedirs(partial_dir, exist_ok=True)
-    partial_csv = os.path.join(partial_dir, "full_sweep_partial.csv")
 
+    # ── Read all existing chunks to build done_set ────────────────────────────
     done_set = set()
-    if os.path.exists(partial_csv):
-        try:
-            _done_df = pd.read_csv(partial_csv)
-            done_set = set(int(t) for t in _done_df["Test"].tolist())
-            print(
-                f"Resume checkpoint : {len(done_set):,}/{total_expected:,} "
-                f"combos already done, skipping those"
-            )
-            del _done_df
-        except Exception as e:
-            print(f"WARN: could not read partial CSV ({e}); truncating and starting fresh")
-            done_set = set()
-            # Re-write clean header so stale/mismatched rows don't accumulate
-            pd.DataFrame(columns=COLUMNS_43).to_csv(partial_csv, index=False)
+    existing_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+    # Also load legacy single-file if it exists
+    legacy_csv = os.path.join(partial_dir, "full_sweep_partial.csv")
+    if os.path.exists(legacy_csv):
+        existing_chunks = [legacy_csv] + existing_chunks
+    if existing_chunks:
+        print(f"Reading {len(existing_chunks)} existing chunk file(s) to build resume set…")
+        for cf in existing_chunks:
+            try:
+                _df = pd.read_csv(cf, usecols=["Test"])
+                done_set.update(int(t) for t in _df["Test"])
+            except Exception as e:
+                print(f"  WARN: could not read {cf}: {e}")
+        print(f"  Resume: {len(done_set):,}/{total_expected:,} combos already done, skipping those")
 
-    if not os.path.exists(partial_csv):
-        pd.DataFrame(columns=COLUMNS_43).to_csv(partial_csv, index=False)
+    # ── Determine current chunk state (which chunk to write to next) ──────────
+    real_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+    if real_chunks:
+        last_chunk = real_chunks[-1]
+        _cur_chunk_idx = int(
+            os.path.basename(last_chunk).replace("chunk_", "").replace(".csv", "")
+        )
+        try:
+            _cur_chunk_rows = max(0, sum(1 for _ in open(last_chunk)) - 1)  # minus header
+            if _cur_chunk_rows >= CHUNK_SIZE:
+                _cur_chunk_idx += 1
+                _cur_chunk_rows = 0
+        except Exception:
+            _cur_chunk_rows = 0
+    else:
+        _cur_chunk_idx  = 1
+        _cur_chunk_rows = 0
+
+    def _chunk_path():
+        return os.path.join(partial_dir, f"chunk_{_cur_chunk_idx:06d}.csv")
 
     CHECKPOINT_EVERY = 5
     pending_rows     = []
 
     def _flush_pending():
+        nonlocal _cur_chunk_idx, _cur_chunk_rows
         if not pending_rows:
             return
-        pd.DataFrame(pending_rows, columns=COLUMNS_43).to_csv(
-            partial_csv, mode="a", header=False, index=False
-        )
+        batch = list(pending_rows)
         pending_rows.clear()
+        cp = _chunk_path()
+        write_hdr = not os.path.exists(cp) or _cur_chunk_rows == 0
+        pd.DataFrame(batch, columns=COLUMNS_43).to_csv(
+            cp, mode="a", header=write_hdr, index=False
+        )
+        _cur_chunk_rows += len(batch)
+        if _cur_chunk_rows >= CHUNK_SIZE:
+            _cur_chunk_idx  += 1
+            _cur_chunk_rows  = 0
 
     test_num         = 0
     done_before      = len(done_set)
     done_this_run    = 0
 
     loop_start       = datetime.now()
-    _last_excel_save = datetime.now()  # FIX: track last in-process Excel save time
+    _last_excel_save = datetime.now()
 
     for filter_key, filter_group in filter_groups:
         db, pmin, pmax, amin, amax = filter_key
@@ -1677,11 +1729,13 @@ def main():
                 # later killed by the GitHub Actions timeout before main() exits.
                 _now = datetime.now()
                 if (_now - _last_excel_save).total_seconds() >= 1800:
-                    print("  [Periodic save] Generating partial Excel from checkpoint…")
-                    save_sweep_excel(
-                        partial_csv, OUTPUT_DIR, max_rows_per_sheet,
-                        mode_label, False, None, None
-                    )
+                    print("  [Periodic save] Generating partial Excel from chunk files…")
+                    _chunks_now = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+                    if _chunks_now:
+                        save_sweep_excel(
+                            _chunks_now, OUTPUT_DIR, max_rows_per_sheet,
+                            mode_label, False, None, None
+                        )
                     _last_excel_save = _now
 
         if (done_before + done_this_run) % 200 == 0 and done_this_run:
@@ -1700,9 +1754,12 @@ def main():
     total_done  = done_before + done_this_run
     is_complete = (total_done >= total_expected)
 
-    # Always save sweep Excel from checkpoint (partial OR complete)
+    # Always save sweep Excel from chunk files (partial OR complete)
+    _all_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+    if os.path.exists(legacy_csv) and legacy_csv not in _all_chunks:
+        _all_chunks = [legacy_csv] + _all_chunks
     sweep_excel = save_sweep_excel(
-        partial_csv, OUTPUT_DIR, max_rows_per_sheet, mode_label,
+        _all_chunks, OUTPUT_DIR, max_rows_per_sheet, mode_label,
         is_complete, month_dir, ts_str
     )
 
