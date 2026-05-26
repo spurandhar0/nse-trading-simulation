@@ -2,7 +2,7 @@ name: Sweep Auto-Continue
 
 on:
   workflow_run:
-    workflows: ["Monthly Parameter Sweep (All 2000 Combos)"]
+    workflows: ["Monthly Parameter Sweep"]
     types: [completed]
 
 env:
@@ -23,37 +23,45 @@ jobs:
           script: |
             const run = context.payload.workflow_run;
 
-            // FIX (cascade protection): If the triggering run lasted < 5 minutes,
+            // CASCADE PROTECTION: If the triggering run lasted < 5 minutes,
             // it was an instant failure / cascade — don't re-trigger endlessly.
             const durationMin = (new Date(run.updated_at) - new Date(run.created_at)) / 60000;
             console.log(`Triggering run #${run.run_number} lasted ${durationMin.toFixed(1)} min (conclusion: ${run.conclusion})`);
             if (durationMin < 5) {
-              console.log('Run was too short (<5 min) — looks like an instant failure or cascade. Not re-triggering.');
+              console.log('Run was too short (<5 min) — instant failure or cascade. Not re-triggering.');
               core.setOutput('should_continue', 'false');
               return;
             }
 
-            // Check if partial checkpoint CSV exists in the repo
+            // Check if any chunk_*.csv files exist in output/partial/
+            // (chunk files = sweep is still in progress; no chunk files = complete or not started)
             try {
-              const { data: content } = await github.rest.repos.getContent({
+              const { data: contents } = await github.rest.repos.getContent({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                path: 'output/partial/full_sweep_partial.csv',
+                path: 'output/partial',
               });
-              // File exists — sweep is NOT complete, trigger another run
-              console.log('Partial CSV found — sweep is not complete. Triggering next run...');
-              core.setOutput('should_continue', 'true');
+              const chunkFiles = Array.isArray(contents)
+                ? contents.filter(f => /^chunk_\d+\.csv$/.test(f.name))
+                : [];
+              if (chunkFiles.length > 0) {
+                console.log(`Found ${chunkFiles.length} chunk file(s) — sweep is not complete. Triggering next run...`);
+                core.setOutput('should_continue', 'true');
+              } else {
+                console.log('No chunk files in output/partial/ — sweep is complete or not started. No re-trigger.');
+                core.setOutput('should_continue', 'false');
+              }
             } catch (e) {
               if (e.status === 404) {
-                console.log('Partial CSV not found — sweep is complete. No re-trigger needed.');
+                console.log('output/partial/ directory not found — sweep is complete. No re-trigger needed.');
                 core.setOutput('should_continue', 'false');
               } else {
                 throw e;
               }
             }
 
-      # FIX: Pass explicit inputs to skip DB rebuild steps (1–4).
-      # Only Step 5 (simulation) runs; DB steps are skipped (db/ is cached).
+      # Pass explicit inputs to skip DB rebuild steps (1–4).
+      # Only Step 5 (simulation) runs on continuation; DB steps are skipped (db/ is cached).
       - name: Trigger next sweep run
         if: steps.check.outputs.should_continue == 'true'
         uses: actions/github-script@v7
