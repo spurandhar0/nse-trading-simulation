@@ -1092,21 +1092,30 @@ def style_sheet(ws, mode_label):
 def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_label,
                      is_complete, month_dir=None, ts_str=None):
     """
-    Convert chunk files (or legacy single CSV) into a multi-sheet Excel.
+    Convert chunk files (or legacy single CSV) into split multi-sheet Excel files.
+
+    AUTO-SPLIT: Final output is split into part files capped at MAX_ROWS_PER_FILE rows
+    each (~75 MB max), so GitHub's 100 MB limit is never hit regardless of combo count.
 
     chunk_files_or_csv: list of chunk CSV paths, or single CSV path string.
     Partial output: output/full_sweep/full_sweep_partial_latest.xlsx  (fixed name,
       overwrites on every save — prevents file accumulation in git over many runs)
-    Final output  : output/full_sweep/full_sweep_final_YYYYMMDD_HHMMSS.xlsx
-      - Data_1 .. Data_N sheets (max_rows_per_sheet rows each, 25 000 by default)
-      - Consolidated sheet: TOP 20 WinRate rows from each Data sheet
+    Final output  : output/full_sweep/full_sweep_final_YYYYMMDD_HHMMSS_part01.xlsx
+                    output/full_sweep/full_sweep_final_YYYYMMDD_HHMMSS_part02.xlsx  (if needed)
+      - Data_1 .. Data_N sheets per file (max_rows_per_sheet rows each, 25 000 by default)
+      - Consolidated sheet per file: TOP 20 WinRate rows from each Data sheet in that file
 
-    If is_complete=True: also copies to output/YYYY-MM/Results_YYYYMMDD.xlsx
+    If is_complete=True: also copies part01 to output/YYYY-MM/Results_YYYYMMDD.xlsx
     and deletes all chunk files so the next sweep starts fresh.
 
-    Returns the path of the saved Excel, or None if no data found.
+    Returns list of saved Excel paths, or [] if no data found.
     """
-    import shutil
+    import shutil, math
+
+    # MAX rows per Excel file — keeps each file well under GitHub's 100 MB limit.
+    # At ~90 MB per 100 K rows, 75 K rows ≈ 68 MB (safe margin).
+    # Increase if your rows are smaller; decrease if your rows are wider.
+    MAX_ROWS_PER_FILE = 75_000
 
     # Accept either a list of chunk files or a single legacy CSV path
     if isinstance(chunk_files_or_csv, str):
@@ -1116,7 +1125,7 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
 
     if not files:
         print("WARN: no chunk/CSV files found — skipping Excel save")
-        return None
+        return []
 
     dfs = []
     for cf in files:
@@ -1125,139 +1134,160 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
         except Exception as e:
             print(f"  WARN: could not read {cf}: {e}")
     if not dfs:
-        return None
+        return []
 
     df_all = pd.concat(dfs, ignore_index=True)
     df_all = df_all.drop_duplicates(subset=["Test"], keep="last")
     df_all = df_all.sort_values("Test").reset_index(drop=True)
     total_rows = len(df_all)
-    print(f"Building sweep Excel: {total_rows:,} rows, {max_rows_per_sheet:,}/sheet …")
 
     # Output folder: output/full_sweep/
     sweep_dir = os.path.join(output_dir, "full_sweep")
     os.makedirs(sweep_dir, exist_ok=True)
 
-    now_ts = datetime.now()
-    # FIX (space): partial uses a fixed filename (overwrites) to prevent
-    # accumulation of many timestamped files in git across restart cycles.
-    # Final uses a timestamp so each monthly result is archived distinctly.
+    now_ts    = datetime.now()
+    now_label = now_ts.strftime("%d-%b-%Y %H:%M")
+    label     = "final" if is_complete else "partial"
+
+    # ── Split df_all into file-sized chunks ───────────────────────────────────
     if is_complete:
-        now_str  = now_ts.strftime("%Y%m%d_%H%M%S")
-        out_path = os.path.join(sweep_dir, f"full_sweep_final_{now_str}.xlsx")
+        now_str    = now_ts.strftime("%Y%m%d_%H%M%S")
+        n_parts    = max(1, math.ceil(total_rows / MAX_ROWS_PER_FILE))
+        file_chunks = [df_all.iloc[i*MAX_ROWS_PER_FILE:(i+1)*MAX_ROWS_PER_FILE]
+                       for i in range(n_parts)]
+        use_part_suffix = (n_parts > 1)
+        print(f"Building sweep Excel: {total_rows:,} rows → {n_parts} file(s), "
+              f"{max_rows_per_sheet:,} rows/sheet, cap {MAX_ROWS_PER_FILE:,} rows/file …")
     else:
-        out_path = os.path.join(sweep_dir, "full_sweep_partial_latest.xlsx")
-    label = "final" if is_complete else "partial"
-
-    wb = Workbook()
-    sheet_num     = 1
-    rows_on_sheet = 0
-    sheet_top20    = {}          # sheet_name → list of row-lists for top-20 selection
-
-    ws = wb.active
-    ws.title = "Data_1"
-    ws.append(COLUMNS_43)
-    sheet_top20["Data_1"] = []
+        # Partial: always single file with fixed name (no split needed — partial is smaller)
+        file_chunks = [df_all]
+        use_part_suffix = False
+        n_parts = 1
 
     thin = Side(style="thin", color="BFBFBF")
     bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    for _, r in df_all.iterrows():
-        if rows_on_sheet >= max_rows_per_sheet:
-            sheet_num    += 1
-            ws = wb.create_sheet(title=f"Data_{sheet_num}")
-            ws.append(COLUMNS_43)
-            sheet_top20[f"Data_{sheet_num}"] = []
-            rows_on_sheet = 0
-        row_vals = [r.get(c, 0) for c in COLUMNS_43]
-        ws.append(row_vals)
-        sheet_top20[f"Data_{sheet_num}"].append(row_vals)
-        rows_on_sheet += 1
+    saved_paths = []
 
-    # Style header of every Data sheet (no per-cell zebra — too slow for 25K rows)
-    now_label = now_ts.strftime("%d-%b-%Y %H:%M")
-    for sn in range(1, sheet_num + 1):
-        sname = f"Data_{sn}"
-        if sname not in wb.sheetnames:
-            continue
-        ws_d = wb[sname]
-        title = (f"NSE Param Sweep — {sname} — "
-                 f"{total_rows:,} rows ({label}) — {now_label}")
-        # Insert merged title row
-        ws_d.insert_rows(1)
-        ws_d.merge_cells(start_row=1, start_column=1,
-                         end_row=1, end_column=len(COLUMNS_43))
-        tc       = ws_d.cell(row=1, column=1)
-        tc.value = title
-        tc.font  = Font(bold=True, size=12, color=WHITE)
-        tc.fill  = PatternFill("solid", fgColor=NAVY)
-        tc.alignment = Alignment(horizontal="center", vertical="center")
-        ws_d.row_dimensions[1].height = 24
-        # Style header row (now row 2 after insert)
-        for ci, col_name in enumerate(COLUMNS_43, 1):
-            cell           = ws_d.cell(row=2, column=ci)
+    for part_idx, df_part in enumerate(file_chunks, 1):
+        part_rows = len(df_part)
+
+        # Determine output path
+        if not is_complete:
+            out_path = os.path.join(sweep_dir, "full_sweep_partial_latest.xlsx")
+        elif use_part_suffix:
+            out_path = os.path.join(sweep_dir,
+                                    f"full_sweep_final_{now_str}_part{part_idx:02d}.xlsx")
+        else:
+            out_path = os.path.join(sweep_dir, f"full_sweep_final_{now_str}.xlsx")
+
+        wb = Workbook()
+        sheet_num     = 1
+        rows_on_sheet = 0
+        sheet_top20   = {}   # sheet_name → list of row-lists for top-20 selection
+
+        ws = wb.active
+        ws.title = "Data_1"
+        ws.append(COLUMNS_43)
+        sheet_top20["Data_1"] = []
+
+        for _, r in df_part.iterrows():
+            if rows_on_sheet >= max_rows_per_sheet:
+                sheet_num    += 1
+                ws = wb.create_sheet(title=f"Data_{sheet_num}")
+                ws.append(COLUMNS_43)
+                sheet_top20[f"Data_{sheet_num}"] = []
+                rows_on_sheet = 0
+            row_vals = [r.get(c, 0) for c in COLUMNS_43]
+            ws.append(row_vals)
+            sheet_top20[f"Data_{sheet_num}"].append(row_vals)
+            rows_on_sheet += 1
+
+        # Style header of every Data sheet
+        part_label = f"Part {part_idx}/{n_parts} — " if use_part_suffix else ""
+        for sn in range(1, sheet_num + 1):
+            sname = f"Data_{sn}"
+            if sname not in wb.sheetnames:
+                continue
+            ws_d  = wb[sname]
+            title = (f"NSE Param Sweep — {part_label}{sname} — "
+                     f"{part_rows:,} rows ({label}) — {now_label}")
+            ws_d.insert_rows(1)
+            ws_d.merge_cells(start_row=1, start_column=1,
+                             end_row=1, end_column=len(COLUMNS_43))
+            tc           = ws_d.cell(row=1, column=1)
+            tc.value     = title
+            tc.font      = Font(bold=True, size=12, color=WHITE)
+            tc.fill      = PatternFill("solid", fgColor=NAVY)
+            tc.alignment = Alignment(horizontal="center", vertical="center")
+            ws_d.row_dimensions[1].height = 24
+            for ci, col_name in enumerate(COLUMNS_43, 1):
+                cell           = ws_d.cell(row=2, column=ci)
+                cell.font      = Font(bold=True, size=10, color=WHITE)
+                cell.fill      = PatternFill("solid", fgColor=NAVY)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border    = bdr
+            ws_d.row_dimensions[2].height = 18
+            ws_d.freeze_panes = ws_d["A3"]
+            ws_d.auto_filter.ref = (
+                ws_d.cell(row=2, column=1).coordinate + ":" +
+                ws_d.cell(row=2, column=len(COLUMNS_43)).coordinate
+            )
+            for ci in range(1, len(COLUMNS_43) + 1):
+                ws_d.column_dimensions[get_column_letter(ci)].width = 13
+            ws_d.page_setup.orientation = "landscape"
+            ws_d.page_setup.fitToPage   = True
+            ws_d.page_setup.fitToWidth  = 1
+            ws_d.page_setup.fitToHeight = 0
+
+        # ── Consolidated sheet: TOP 20 WinRate rows from each Data sheet ──────
+        winrate_idx = COLUMNS_43.index("WinRate")
+        ws_cons     = wb.create_sheet(title="Consolidated")
+        cons_cols   = ["SourceSheet"] + COLUMNS_43
+        ws_cons.append(cons_cols)
+
+        all_top20_count = 0
+        for sname, rows in sheet_top20.items():
+            if not rows:
+                continue
+            sorted_rows = sorted(
+                rows,
+                key=lambda x: float(x[winrate_idx]) if x[winrate_idx] is not None else 0,
+                reverse=True
+            )
+            for row in sorted_rows[:20]:
+                ws_cons.append([sname] + list(row))
+                all_top20_count += 1
+
+        # Style Consolidated header
+        for ci, col_name in enumerate(cons_cols, 1):
+            cell           = ws_cons.cell(row=1, column=ci)
             cell.font      = Font(bold=True, size=10, color=WHITE)
             cell.fill      = PatternFill("solid", fgColor=NAVY)
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border    = bdr
-        ws_d.row_dimensions[2].height = 18
-        ws_d.freeze_panes = ws_d["A3"]
-        ws_d.auto_filter.ref = (
-            ws_d.cell(row=2, column=1).coordinate + ":" +
-            ws_d.cell(row=2, column=len(COLUMNS_43)).coordinate
+        ws_cons.row_dimensions[1].height = 18
+        ws_cons.freeze_panes = ws_cons["A2"]
+        ws_cons.auto_filter.ref = (
+            ws_cons.cell(row=1, column=1).coordinate + ":" +
+            ws_cons.cell(row=1, column=len(cons_cols)).coordinate
         )
-        for ci in range(1, len(COLUMNS_43) + 1):
-            ws_d.column_dimensions[get_column_letter(ci)].width = 13
-        ws_d.page_setup.orientation = "landscape"
-        ws_d.page_setup.fitToPage   = True
-        ws_d.page_setup.fitToWidth  = 1
-        ws_d.page_setup.fitToHeight = 0
+        for ci in range(1, len(cons_cols) + 1):
+            ws_cons.column_dimensions[get_column_letter(ci)].width = 13
+        ws_cons.column_dimensions["A"].width = 15
 
-    # ── Consolidated sheet: TOP 20 WinRate rows from each Data sheet ───────────
-    winrate_idx = COLUMNS_43.index("WinRate")
-    ws_cons     = wb.create_sheet(title="Consolidated")
-    cons_cols   = ["SourceSheet"] + COLUMNS_43
-    ws_cons.append(cons_cols)
+        wb.save(out_path)
+        saved_paths.append(out_path)
+        print(f"✅ Sweep Excel saved : {out_path}")
+        print(f"   Data sheets       : {sheet_num} (≤{max_rows_per_sheet:,} rows each)")
+        print(f"   Consolidated      : {all_top20_count} rows (top 20 per sheet)")
 
-    all_top20_count = 0
-    for sname, rows in sheet_top20.items():
-        if not rows:
-            continue
-        sorted_rows = sorted(
-            rows,
-            key=lambda x: float(x[winrate_idx]) if x[winrate_idx] is not None else 0,
-            reverse=True
-        )
-        for row in sorted_rows[:20]:
-            ws_cons.append([sname] + list(row))
-            all_top20_count += 1
-
-    # Style Consolidated header
-    for ci, col_name in enumerate(cons_cols, 1):
-        cell           = ws_cons.cell(row=1, column=ci)
-        cell.font      = Font(bold=True, size=10, color=WHITE)
-        cell.fill      = PatternFill("solid", fgColor=NAVY)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border    = bdr
-    ws_cons.row_dimensions[1].height = 18
-    ws_cons.freeze_panes = ws_cons["A2"]
-    ws_cons.auto_filter.ref = (
-        ws_cons.cell(row=1, column=1).coordinate + ":" +
-        ws_cons.cell(row=1, column=len(cons_cols)).coordinate
-    )
-    for ci in range(1, len(cons_cols) + 1):
-        ws_cons.column_dimensions[get_column_letter(ci)].width = 13
-    ws_cons.column_dimensions["A"].width = 15  # SourceSheet
-
-    wb.save(out_path)
-    print(f"✅ Sweep Excel saved : {out_path}")
-    print(f"   Data sheets       : {sheet_num} (≤{max_rows_per_sheet:,} rows each)")
-    print(f"   Consolidated      : {all_top20_count} rows (top 20 per sheet)")
-
-    if is_complete:
-        # Copy as final Results_ file in the monthly folder
+    if is_complete and saved_paths:
+        # Copy part01 (or the only file) as final Results_ in the monthly folder
         if month_dir and ts_str:
             final_path = os.path.join(month_dir, f"Results_{ts_str}.xlsx")
-            shutil.copy2(out_path, final_path)
+            import shutil as _sh
+            _sh.copy2(saved_paths[0], final_path)
             print(f"✅ Final Results     : {final_path}")
         # Delete all chunk files so next sweep starts fresh
         for cf in files:
@@ -1267,7 +1297,7 @@ def save_sweep_excel(chunk_files_or_csv, output_dir, max_rows_per_sheet, mode_la
             except Exception as e:
                 print(f"WARN: could not remove {cf}: {e}")
 
-    return out_path
+    return saved_paths
 
 
 # ─── NO-SIGNALS DIAGNOSTIC FILE ──────────────────────────────────────────────
@@ -1384,7 +1414,8 @@ def main():
             "FULL PARAMETER SWEEP", False, None, None
         )
         if result:
-            print(f"✅ Partial Excel generated: {result}")
+            for p in result:
+                print(f"✅ Partial Excel generated: {p}")
         return
 
     signals_file = SIGNALS_FILE_QUICK if mode == "quick" else SIGNALS_FILE_FULL
@@ -1770,7 +1801,8 @@ def main():
         )
         print(f"   Checkpoint : {partial_csv}")
         if sweep_excel:
-            print(f"   Excel saved: {sweep_excel}")
+            for p in sweep_excel:
+                print(f"   Excel saved: {p}")
         print(f"   Re-run the 'Monthly Parameter Sweep' workflow to resume from here.")
         return
 
