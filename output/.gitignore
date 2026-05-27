@@ -2,9 +2,13 @@
 # e.g. output/2026-05/*.xlsx, output/2026-06/*.xlsx etc.
 [0-9][0-9][0-9][0-9]-[0-9][0-9]/
 
-# Block full_sweep XLSX (keep only partial CSV checkpoint)
-full_sweep/*.xlsx
-full_sweep/*.xls
+# Block full_sweep intermediate/partial Excel (overwritten every run)
+full_sweep/full_sweep_partial_latest.xlsx
+full_sweep/SweepPartial_*.xlsx
+
+# Allow full_sweep_final_*.xlsx (permanent final output per sweep run)
+# These are committed with git add -f in the workflow
+# !full_sweep/full_sweep_final_*.xlsx  <- already not blocked by above rules
 
 # Keep latest_quickrun.xlsx (needed by dashboard)
 !latest_quickrun.xlsx
