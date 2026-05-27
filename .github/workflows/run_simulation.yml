@@ -185,9 +185,11 @@ jobs:
       - name: Commit and push outputs
         if: always()
         run: |
-          # Stage chunk files, partial Excel, and db/ — never large dated XLSX subdirectories
-          git add "output/partial/" "output/full_sweep/" "output/*.csv" "output/*.json" "output/.gitignore" "db/" 2>/dev/null || true
+          # Stage chunk files, final Excel, and db/ — force-add full_sweep finals (bypasses gitignore)
+          git add "output/partial/" "output/*.csv" "output/*.json" "output/.gitignore" "db/" 2>/dev/null || true
           git add output/.gitkeep 2>/dev/null || true
+          git add -f output/full_sweep/full_sweep_final_*.xlsx 2>/dev/null || true
+          git add -f output/full_sweep/full_sweep_partial_latest.xlsx 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nothing new to commit"
             exit 0
