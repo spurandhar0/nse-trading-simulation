@@ -1,0 +1,97 @@
+name: Recover Sweep Excel from Partial CSV
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pandas numpy pyarrow openpyxl
+
+      - name: Convert partial CSV to Final Excel
+        run: |
+          python3 << 'EOF'
+          import pandas as pd
+          import os
+          import glob
+          from datetime import datetime
+
+          partial_csv = "output/partial/full_sweep_partial.csv"
+          sweep_dir = "output/full_sweep"
+          os.makedirs(sweep_dir, exist_ok=True)
+
+          if not os.path.exists(partial_csv):
+              print("ERROR: partial CSV not found!")
+              exit(1)
+
+          print(f"Reading {partial_csv}...")
+          df = pd.read_csv(partial_csv)
+          df = df.drop_duplicates(subset=["Test"], keep="last")
+          df = df.sort_values("Test").reset_index(drop=True)
+          total = len(df)
+          print(f"Total rows: {total:,}")
+
+          max_rows = 25000
+          ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+          out_path = os.path.join(sweep_dir, f"full_sweep_final_{ts}.xlsx")
+
+          print(f"Writing to {out_path}...")
+          with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+              sheet_idx = 1
+              top_rows = []
+              for start in range(0, total, max_rows):
+                  chunk = df.iloc[start:start+max_rows]
+                  sheet_name = f"Data_{sheet_idx}"
+                  chunk.to_excel(writer, index=False, sheet_name=sheet_name)
+                  # Top 20 by WinRate for consolidated sheet
+                  if "WinRate" in chunk.columns:
+                      top_rows.append(chunk.nlargest(20, "WinRate"))
+                  sheet_idx += 1
+
+              # Consolidated sheet
+              if top_rows:
+                  consolidated = pd.concat(top_rows).drop_duplicates(subset=["Test"]).nlargest(100, "WinRate")
+                  consolidated.to_excel(writer, index=False, sheet_name="Consolidated")
+                  print(f"Consolidated sheet: {len(consolidated)} rows")
+
+          size_mb = os.path.getsize(out_path) / (1024*1024)
+          print(f"Done! Excel saved: {out_path} ({size_mb:.1f} MB)")
+          EOF
+
+      - name: Commit and push Final Excel
+        run: |
+          git add -f output/full_sweep/full_sweep_final_*.xlsx
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "recover: Final sweep Excel from partial CSV ($(date +'%d-%b-%Y'))"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
+          echo "✅ Final Excel committed and pushed!"
