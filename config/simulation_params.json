@@ -2777,10 +2777,10 @@
     "filter": {
       "_comment": "Filter ranges. All combinations tested. Invalid combos (min>=max) auto-skipped.",
       "days_back": [
-        15,
-        20,
-        25,
-        30
+        35,
+        40,
+        45,
+        50
       ],
       "pct_min": [
         -0.1,
