@@ -2777,8 +2777,6 @@
     "filter": {
       "_comment": "Filter ranges. All combinations tested. Invalid combos (min>=max) auto-skipped.",
       "days_back": [
-        5,
-        10,
         15,
         20,
         25,
