@@ -198,6 +198,9 @@ jobs:
           # Retry push up to 3 times (handles race conditions with bg committer)
           for attempt in 1 2 3; do
             git fetch origin main
+            # Stash any unstaged changes before rebase (bg committer may have left some)
+            git add -A 2>/dev/null || true
+            git diff --cached --quiet 2>/dev/null || git commit -m "auto-checkpoint: pre-rebase $(date +%H:%M)" 2>/dev/null || true
             if git rebase origin/main; then
               git push origin HEAD:main && echo "✅ Push succeeded (attempt $attempt)" && exit 0
             fi
