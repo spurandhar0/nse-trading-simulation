@@ -2777,6 +2777,12 @@
     "filter": {
       "_comment": "Filter ranges. All combinations tested. Invalid combos (min>=max) auto-skipped.",
       "days_back": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
         35,
         40,
         45,
@@ -2813,7 +2819,7 @@
     "trade": {
       "_comment": "Trade param ranges. All combos tested per filter combo.",
       "max_buys": [
-       4
+       1
       ],
       "buy_drop": [
         0.1
@@ -2822,7 +2828,7 @@
         0.1
         ],
       "stoploss": [
-        0.25
+        0.20
       ],
       "max_duration": [
         40
