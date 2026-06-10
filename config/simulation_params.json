@@ -2819,7 +2819,8 @@
     "trade": {
       "_comment": "Trade param ranges. All combos tested per filter combo.",
       "max_buys": [
-       1
+       1,
+       2
       ],
       "buy_drop": [
         0.1
@@ -2828,10 +2829,12 @@
         0.1
         ],
       "stoploss": [
-        0.20
+        0.15
       ],
       "max_duration": [
-        40
+        20,
+        40,
+        60
         ],
       "use_stoploss": [
         true
