@@ -1,6 +1,6 @@
 # NSE Trading Simulation — GitHub Automation
 
-> Zero PC dependency. Upload NSE data → click Run → download Excel results.
+> Zero PC dependency. Upload NSE data → click Run → download CSV results (25K rows/file).
 
 ---
 
@@ -13,8 +13,8 @@
 │   ├── 02_filter_eq.py             # Keep EQ series only
 │   ├── 03_find_ath.py              # All Time High per symbol
 │   ├── 04_filter_signals.py        # 5-day dip + ATH distance filter
-│   ├── 05_run_simulation.py        # 2000-combo parameter test → Excel
-│   └── 06_consolidate_results.py   # Merge multiple result Excels
+│   ├── 05_run_simulation.py        # 750K-combo parameter sweep → CSV (25K rows/file)
+│   └── 06_consolidate_results.py   # Merge multiple result files
 ├── config/
 │   └── simulation_params.json      # ← Edit filter/trade params here
 ├── .github/workflows/
@@ -23,7 +23,7 @@
 ├── bhav_data/                      # Upload historical CSVs here
 │   └── Apr-2026/                   # Auto-created monthly folders
 ├── db/                             # Auto-generated intermediate files
-└── output/                         # Excel results saved here
+└── output/                         # CSV results saved here (runs/YYYY-MM-DD/)
 ```
 
 ---

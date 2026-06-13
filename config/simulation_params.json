@@ -1,12 +1,12 @@
 {
   "_readme": "NSE Trading Simulation \u2014 Parameter Configuration",
   "_readme2": "Two sections: quick_run (daily, single param set) and param_sweep (monthly, all combos)",
-  "signal_start_date": "2025-01-01",
+  "signal_start_date": "2026-01-01",
   "signal_end_date": "2099-12-31",
   "investment_per_buy": 10000,
   "pending_window_days": 5,
   "force_exit_calendar_days": 60,
-  "max_rows_per_sheet": 50000,
+  "max_rows_per_sheet": 25000,
   "_section_quick_run": "========== QUICK RUN (daily) ==========",
   "_quick_run_comment": "Single fixed parameter set. Change these values to update your default daily run.",
   "_watch_symbols_comment": "Specific symbols to run. Empty list [] = ALL EQ symbols. Example: [\"TCS\",\"WIPRO\",\"INFY\"]",
@@ -2775,73 +2775,21 @@
       "MUFIN"
     ],
     "filter": {
-      "_comment": "Filter ranges. All combinations tested. Invalid combos (min>=max) auto-skipped.",
-      "days_back": [
-        5,
-        10,
-        15,
-        20,
-        25,
-        30,
-        35,
-        40,
-        45,
-        50
-      ],
-      "pct_min": [
-        -0.1,
-        -0.09,
-        -0.08,
-        -0.07,
-        -0.06
-      ],
-      "pct_max": [
-        -0.05,
-        -0.04,
-        -0.03,
-        -0.02
-      ],
-      "ath_min": [
-        -0.6,
-        -0.55,
-        -0.5,
-        -0.45,
-        -0.4
-      ],
-      "ath_max": [
-        -0.45,
-        -0.4,
-        -0.35,
-        -0.3,
-        -0.25
-      ]
+      "_comment": "Filter ranges. All 6,250 combinations tested (10x5x5x5x5).",
+      "days_back": [5, 10, 15, 20, 25, 30, 35, 40, 45, 50],
+      "pct_min": [-0.10, -0.09, -0.08, -0.07, -0.06],
+      "pct_max": [-0.05, -0.04, -0.03, -0.02, -0.01],
+      "ath_min": [-0.60, -0.55, -0.50, -0.45, -0.40],
+      "ath_max": [-0.45, -0.40, -0.35, -0.30, -0.25]
     },
     "trade": {
-      "_comment": "Trade param ranges. All combos tested per filter combo.",
-      "max_buys": [
-       1,
-       2
-      ],
-      "buy_drop": [
-        0.1
-        ],
-      "target": [
-        0.1
-        ],
-      "stoploss": [
-        0.15
-      ],
-      "max_duration": [
-        20,
-        40,
-        60
-        ],
-      "use_stoploss": [
-        true
-      ],
-      "use_target": [
-        true
-      ]
+      "_comment": "Trade param ranges. 120 combos per filter combo (2x2x2x1x5x3).",
+      "max_buys": [1, 2],
+      "buy_drop": [0.1, 0.2],
+      "target": [0.1, 0.2],
+      "stoploss": [0.15],
+      "max_duration": [20, 30, 40, 50, 60],
+      "exit_modes": [[true, true], [true, false], [false, true]]
     }
   }
 }
