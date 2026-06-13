@@ -24,12 +24,18 @@ Output: db/signals.parquet  (one row per passing signal day per symbol per filte
 """
 
 import os
+os.environ['ARROW_NUM_THREADS'] = '1'
 import sys
 import json
 import argparse
 import itertools
 import numpy as np
 import pandas as pd
+try:
+    import pyarrow as pa
+    pa.set_cpu_count(1)
+except Exception:
+    pass
 from datetime import datetime
 
 CONFIG_FILE      = "config/simulation_params.json"
@@ -50,17 +56,11 @@ def build_filter_combos(cfg, mode):
         return [(q["days_back"], q["pct_min"], q["pct_max"],
                  q["ath_min"],   q["ath_max"])]
 
-    # Full mode: sweep all param_sweep.filter ranges
+    # Full mode: sweep all param_sweep.filter ranges (all combos, no filtering)
     f = cfg["param_sweep"]["filter"]
-    combos = []
-    for db, pmin, pmax, amin, amax in itertools.product(
+    combos = list(itertools.product(
         f["days_back"], f["pct_min"], f["pct_max"], f["ath_min"], f["ath_max"]
-    ):
-        if pmin >= pmax:   # invalid: min must be more negative than max
-            continue
-        if amin >= amax:
-            continue
-        combos.append((db, pmin, pmax, amin, amax))
+    ))
     return combos
 
 def filter_symbol(sym_df, ath_price, days_back, pct_min, pct_max,
@@ -283,11 +283,20 @@ def main():
                 flag = f"pct_from_ath={pct_from_ath:+.1%}"
             print(f"   {sym:15s}: close={latest_close:8.2f}  ATH={ath_price:8.2f}  {flag}")
             shown += 1
-        pd.DataFrame(columns=EMPTY_COLS).to_parquet(output_file, index=False)
+        try:
+            pd.DataFrame(columns=EMPTY_COLS).to_parquet(output_file, index=False, engine='pyarrow')
+        except TypeError:
+            pd.DataFrame(columns=EMPTY_COLS).to_parquet(output_file, index=False)
         raise SystemExit(0)
 
     sig_df = pd.DataFrame(all_signals)
-    sig_df.to_parquet(output_file, index=False)
+    try:
+        import pyarrow as _pa
+        tbl = _pa.Table.from_pandas(sig_df, nthreads=1)
+        import pyarrow.parquet as pq
+        pq.write_table(tbl, output_file)
+    except Exception:
+        sig_df.to_parquet(output_file, index=False)
 
     print(f"✅ Signals saved       : {output_file}")
     print(f"✅ Unique symbols      : {sig_df['SYMBOL'].nunique():,}")

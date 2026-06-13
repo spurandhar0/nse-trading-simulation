@@ -83,7 +83,7 @@ COLUMNS_43 = [
     "ExitTGT", "ExitSL", "ExitFEMD", "ExitFECD"
 ]
 
-CHUNK_SIZE = 100_000   # rows per partial chunk file — keeps each file well under GitHub's 100 MB limit
+CHUNK_SIZE = 25_000    # rows per CSV output file (25K rows each)
 
 NAVY  = "00203864"
 WHITE = "00FFFFFF"
@@ -114,6 +114,17 @@ def build_trade_combos(cfg, mode):
                  q["stoploss"],  q["max_duration"],
                  q.get("use_stoploss", True), q.get("use_target", True))]
     t = cfg["param_sweep"]["trade"]
+    # Support exit_modes: list of [use_sl, use_tgt] pairs for 3-way exit combos
+    exit_modes = t.get("exit_modes", None)
+    if exit_modes:
+        combos = []
+        for base in itertools.product(
+            t["max_buys"], t["buy_drop"], t["target"],
+            t["stoploss"], t["max_duration"]
+        ):
+            for (use_sl, use_tgt) in exit_modes:
+                combos.append(base + (use_sl, use_tgt))
+        return combos
     return list(itertools.product(
         t["max_buys"], t["buy_drop"], t["target"],
         t["stoploss"], t["max_duration"],
@@ -1631,7 +1642,11 @@ def main():
     # FULL MODE -> Aggregate 43-column stats (parameter sweep)
     # ══════════════════════════════════════════════════════════════════════════
     filter_cols   = ["DAYSBACK", "PCTMIN", "PCTMAX", "ATHMIN", "ATHMAX"]
-    filter_groups = sig_df.groupby(filter_cols, dropna=False)
+    try:
+        filter_groups = sig_df.groupby(filter_cols, dropna=False)
+    except TypeError:
+        # Older pandas (<1.1) doesn't support dropna parameter
+        filter_groups = sig_df.groupby(filter_cols)
     total_expected = len(filter_groups) * len(trade_combos)
     print(f"Filter combos in signals : {len(filter_groups)}")
     print(f"Total output rows        : {total_expected:,}")
@@ -1662,12 +1677,18 @@ def main():
                 print(f"  WARN: could not read {cf}: {e}")
         print(f"  Resume: {len(done_set):,}/{total_expected:,} combos already done, skipping those")
 
+    # Create run-date folder for CSV output
+    run_date_str = datetime.now().strftime("%Y-%m-%d")
+    run_folder = os.path.join(OUTPUT_DIR, "runs", run_date_str)
+    os.makedirs(run_folder, exist_ok=True)
+
     # ── Determine current chunk state (which chunk to write to next) ──────────
-    real_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+    # Write chunks to both partial/ (checkpoint) and runs/date/ (CSV output)
+    real_chunks = sorted(glob.glob(os.path.join(run_folder, "sweep_*.csv")))
     if real_chunks:
         last_chunk = real_chunks[-1]
         _cur_chunk_idx = int(
-            os.path.basename(last_chunk).replace("chunk_", "").replace(".csv", "")
+            os.path.basename(last_chunk).replace("sweep_", "").replace(".csv", "")
         )
         try:
             _cur_chunk_rows = max(0, sum(1 for _ in open(last_chunk)) - 1)  # minus header
@@ -1683,6 +1704,9 @@ def main():
     def _chunk_path():
         return os.path.join(partial_dir, f"chunk_{_cur_chunk_idx:06d}.csv")
 
+    def _run_chunk_path():
+        return os.path.join(run_folder, f"sweep_{_cur_chunk_idx:06d}.csv")
+
     CHECKPOINT_EVERY = 5
     pending_rows     = []
 
@@ -1693,10 +1717,13 @@ def main():
         batch = list(pending_rows)
         pending_rows.clear()
         cp = _chunk_path()
+        rp = _run_chunk_path()
         write_hdr = not os.path.exists(cp) or _cur_chunk_rows == 0
-        pd.DataFrame(batch, columns=COLUMNS_43).to_csv(
-            cp, mode="a", header=write_hdr, index=False
-        )
+        df_batch = pd.DataFrame(batch, columns=COLUMNS_43)
+        df_batch.to_csv(cp, mode="a", header=write_hdr, index=False)
+        # Also write to run-date folder (CSV output)
+        run_hdr = not os.path.exists(rp) or _cur_chunk_rows == 0
+        df_batch.to_csv(rp, mode="a", header=run_hdr, index=False)
         _cur_chunk_rows += len(batch)
         if _cur_chunk_rows >= CHUNK_SIZE:
             _cur_chunk_idx  += 1
@@ -1707,7 +1734,6 @@ def main():
     done_this_run    = 0
 
     loop_start       = datetime.now()
-    _last_excel_save = datetime.now()
 
     for filter_key, filter_group in filter_groups:
         db, pmin, pmax, amin, amax = filter_key
@@ -1755,19 +1781,6 @@ def main():
 
             if len(pending_rows) >= CHECKPOINT_EVERY:
                 _flush_pending()
-                # FIX (partial output): periodic in-process Excel save every 30 min.
-                # Ensures a fresh partial Excel exists on disk even if the job is
-                # later killed by the GitHub Actions timeout before main() exits.
-                _now = datetime.now()
-                if (_now - _last_excel_save).total_seconds() >= 1800:
-                    print("  [Periodic save] Generating partial Excel from chunk files…")
-                    _chunks_now = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
-                    if _chunks_now:
-                        save_sweep_excel(
-                            _chunks_now, OUTPUT_DIR, max_rows_per_sheet,
-                            mode_label, False, None, None
-                        )
-                    _last_excel_save = _now
 
         if (done_before + done_this_run) % 200 == 0 and done_this_run:
             elapsed = (datetime.now() - loop_start).total_seconds()
@@ -1785,30 +1798,23 @@ def main():
     total_done  = done_before + done_this_run
     is_complete = (total_done >= total_expected)
 
-    # Always save sweep Excel from chunk files (partial OR complete)
-    _all_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
-    if os.path.exists(legacy_csv) and legacy_csv not in _all_chunks:
-        _all_chunks = [legacy_csv] + _all_chunks
-    sweep_excel = save_sweep_excel(
-        _all_chunks, OUTPUT_DIR, max_rows_per_sheet, mode_label,
-        is_complete, month_dir, ts_str
-    )
+    # Count CSV files in run folder
+    run_csvs = sorted(glob.glob(os.path.join(run_folder, "sweep_*.csv")))
+    total_csv_files = len(run_csvs)
 
     if not is_complete:
         print(
             f"\n⏸  Partial run: {total_done:,}/{total_expected:,} "
             f"combos complete ({done_this_run:,} this run)."
         )
-        print(f"   Checkpoint : {partial_csv}")
-        if sweep_excel:
-            for p in sweep_excel:
-                print(f"   Excel saved: {p}")
-        print(f"   Re-run the 'Monthly Parameter Sweep' workflow to resume from here.")
+        print(f"   CSV files in run folder: {total_csv_files} (25K rows each)")
+        print(f"   Run folder : {run_folder}")
+        print(f"   Re-run to resume from checkpoint.")
         return
 
     print(f"\n✅ All {total_expected:,} combos complete!")
-    if sweep_excel:
-        print(f"✅ Final Excel    : {sweep_excel}")
+    print(f"✅ CSV files : {total_csv_files} files (25K rows each)")
+    print(f"✅ Run folder: {run_folder}")
 
 
 if __name__ == "__main__":
