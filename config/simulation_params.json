@@ -1,7 +1,7 @@
 {
   "_readme": "NSE Trading Simulation \u2014 Parameter Configuration",
   "_readme2": "Two sections: quick_run (daily, single param set) and param_sweep (monthly, all combos)",
-  "signal_start_date": "2026-01-01",
+  "signal_start_date": "2025-01-01",
   "signal_end_date": "2099-12-31",
   "investment_per_buy": 10000,
   "pending_window_days": 5,
