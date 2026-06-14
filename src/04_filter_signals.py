@@ -29,6 +29,7 @@ import sys
 import json
 import argparse
 import itertools
+import glob as _glob
 import numpy as np
 import pandas as pd
 try:
@@ -43,6 +44,9 @@ EQ_FILE          = "db/eq_data.parquet"
 ATH_FILE         = "db/ath.parquet"
 OUTPUT_FILE_FULL = "db/signals.parquet"
 OUTPUT_FILE_QUICK= "db/signals_quick.parquet"
+
+def glob_files(d):
+    return _glob.glob(os.path.join(d, "*.parquet"))
 
 def load_config():
     with open(CONFIG_FILE) as f:
@@ -219,12 +223,37 @@ def main():
     if scan_to < scan_from:
         print("❌ No overlap between data range and signal range. Check config signal_start_date / signal_end_date.")
         raise SystemExit(1)
-    print(f"Processing {len(symbols):,} symbols × {len(filter_combos)} filter combos...")
+    # Free symbol filter set
+    del symbol_filter
 
-    all_signals = []
+    print(f"Processing {len(symbols):,} symbols × {len(filter_combos)} filter combos...")
+    print(f"  (Memory-safe batch mode: flush every 200 symbols)")
+
+    import gc
+
+    COLS = [
+        "SYMBOL","SIGNAL_DATE","SIGNAL_CLOSE","MIN_5D_LOW","MIN_5D_DATE",
+        "PCT_FROM_LOW","PCT_FROM_ATH","PCT_1D_CHANGE","ATH_PRICE",
+        "DAYSBACK","PCTMIN","PCTMAX","ATHMIN","ATHMAX"
+    ]
+
+    # Process in batches and write to temp parquet chunks to avoid OOM
+    import pyarrow.parquet as pq
+    chunk_dir = "db/_signal_chunks"
+    os.makedirs(chunk_dir, exist_ok=True)
+    # Clean old chunks
+    for old in glob_files(chunk_dir):
+        os.remove(old)
+
+    total_signals = 0
+    batch_signals = []
+    chunk_idx = 0
+    BATCH_FLUSH = 50   # flush every 50 symbols (keep memory low)
+    MAX_BATCH_ROWS = 100000  # also flush if batch exceeds 100K signals
+
     for sym_idx, sym in enumerate(symbols):
         if (sym_idx + 1) % 500 == 0:
-            print(f"  [{sym_idx+1}/{len(symbols)}] signals so far: {len(all_signals):,}")
+            print(f"  [{sym_idx+1}/{len(symbols)}] signals so far: {total_signals + len(batch_signals):,}")
 
         ath_price = ath_map.get(sym, 0)
         if ath_price <= 0:
@@ -237,70 +266,82 @@ def main():
         for (db, pmin, pmax, amin, amax) in filter_combos:
             signals = filter_symbol(sym_df, ath_price, db, pmin, pmax,
                                     amin, amax, start_date, end_date)
-            all_signals.extend(signals)
+            batch_signals.extend(signals)
 
-    print(f"\nTotal signals found: {len(all_signals):,}")
+        # Flush batch to disk periodically (by symbol count OR row count)
+        if batch_signals and ((sym_idx + 1) % BATCH_FLUSH == 0 or len(batch_signals) >= MAX_BATCH_ROWS):
+            chunk_file = f"{chunk_dir}/chunk_{chunk_idx:04d}.parquet"
+            df_chunk = pd.DataFrame(batch_signals, columns=COLS)
+            try:
+                tbl = pa.Table.from_pandas(df_chunk, nthreads=1)
+                pq.write_table(tbl, chunk_file)
+                del tbl
+            except Exception:
+                df_chunk.to_parquet(chunk_file, index=False)
+            del df_chunk
+            total_signals += len(batch_signals)
+            batch_signals = []
+            chunk_idx += 1
+            gc.collect()
 
-    EMPTY_COLS = [
-        "SYMBOL","SIGNAL_DATE","SIGNAL_CLOSE","MIN_5D_LOW","MIN_5D_DATE",
-        "PCT_FROM_LOW","PCT_FROM_ATH","PCT_1D_CHANGE","ATH_PRICE",
-        "DAYSBACK","PCTMIN","PCTMAX","ATHMIN","ATHMAX"
-    ]
-
-    if not all_signals:
-        print("⚠️  No signals found. Check your filter parameters and data date range.")
-        print()
-        print("📊 DIAGNOSTIC — ATH vs Latest Price:")
-        print(f"   Data range     : {eq['DATE1'].min().date()} → {eq['DATE1'].max().date()}")
-        print(f"   Signal range   : {start_date.date()} → {end_date.date()}")
-        if filter_combos:
-            fc = filter_combos[0]
-            print(f"   5-day dip      : pct_min={fc[1]:.0%}  pct_max={fc[2]:.0%}")
-            print(f"   ATH distance   : ath_min={fc[3]:.0%}  ath_max={fc[4]:.0%}")
-        print()
-        print("   ⚠️  ATH is computed from your uploaded data only.")
-        print("   ⚠️  With only short-term data (e.g. 1 month), ATH = recent high.")
-        print("   ⚠️  Most stocks appear near ATH and fail the -30% to -60% ATH filter.")
-        print("   ⚠️  SOLUTION: Upload 1-2 years of historical bhav CSVs to bhav_data/")
-        print()
-        print("   Symbol breakdown (first 30):")
-        shown = 0
-        for sym in eq["SYMBOL"].unique():
-            if shown >= 30:
-                break
-            ath_price = ath_map.get(sym, 0)
-            if ath_price <= 0:
-                continue
-            sym_rows = eq[eq["SYMBOL"] == sym]
-            if len(sym_rows) == 0:
-                continue
-            latest_close = float(sym_rows.iloc[-1]["CLOSE_PRICE"])
-            pct_from_ath  = (latest_close - ath_price) / ath_price
-            if filter_combos:
-                fc   = filter_combos[0]
-                flag = "✅ ATH OK" if fc[3] <= pct_from_ath <= fc[4] else f"❌ ATH={pct_from_ath:+.1%} (need {fc[3]:.0%} to {fc[4]:.0%})"
-            else:
-                flag = f"pct_from_ath={pct_from_ath:+.1%}"
-            print(f"   {sym:15s}: close={latest_close:8.2f}  ATH={ath_price:8.2f}  {flag}")
-            shown += 1
+    # Final flush
+    if batch_signals:
+        chunk_file = f"{chunk_dir}/chunk_{chunk_idx:04d}.parquet"
+        df_chunk = pd.DataFrame(batch_signals, columns=COLS)
         try:
-            pd.DataFrame(columns=EMPTY_COLS).to_parquet(output_file, index=False, engine='pyarrow')
+            tbl = pa.Table.from_pandas(df_chunk, nthreads=1)
+            pq.write_table(tbl, chunk_file)
+        except Exception:
+            df_chunk.to_parquet(chunk_file, index=False)
+        total_signals += len(batch_signals)
+        chunk_idx += 1
+
+    print(f"\nTotal signals found: {total_signals:,} (in {chunk_idx} chunks)")
+
+    if total_signals == 0:
+        print("⚠️  No signals found. Check filter parameters and data date range.")
+        print(f"   Data range  : {eq['DATE1'].min().date()} → {eq['DATE1'].max().date()}")
+        print(f"   Signal range: {start_date.date()} → {end_date.date()}")
+        try:
+            pd.DataFrame(columns=COLS).to_parquet(output_file, index=False, engine='pyarrow')
         except TypeError:
-            pd.DataFrame(columns=EMPTY_COLS).to_parquet(output_file, index=False)
+            pd.DataFrame(columns=COLS).to_parquet(output_file, index=False)
+        # Clean chunks
+        for old in glob_files(chunk_dir):
+            os.remove(old)
         raise SystemExit(0)
 
-    sig_df = pd.DataFrame(all_signals)
+    # Merge all chunks into final output using streaming write (low memory)
+    print("Merging chunks into final signals file...")
+    chunk_files = sorted(glob_files(chunk_dir))
     try:
-        import pyarrow as _pa
-        tbl = _pa.Table.from_pandas(sig_df, nthreads=1)
-        import pyarrow.parquet as pq
-        pq.write_table(tbl, output_file)
+        writer = None
+        for cf in chunk_files:
+            tbl = pq.read_table(cf)
+            if writer is None:
+                writer = pq.ParquetWriter(output_file, tbl.schema)
+            writer.write_table(tbl)
+            del tbl
+        if writer:
+            writer.close()
+    except (AttributeError, TypeError):
+        # Fallback for old pyarrow without ParquetWriter
+        tables = []
+        for cf in chunk_files:
+            tables.append(pq.read_table(cf))
+        merged = pa.concat_tables(tables)
+        pq.write_table(merged, output_file)
+        del tables, merged
+    # Clean up chunks
+    for cf in chunk_files:
+        os.remove(cf)
+    try:
+        os.rmdir(chunk_dir)
     except Exception:
-        sig_df.to_parquet(output_file, index=False)
+        pass
 
     print(f"✅ Signals saved       : {output_file}")
-    print(f"✅ Unique symbols      : {sig_df['SYMBOL'].nunique():,}")
-    print(f"✅ Date range          : {sig_df['SIGNAL_DATE'].min()} → {sig_df['SIGNAL_DATE'].max()}")
+    print(f"✅ Total signals       : {total_signals:,}")
 
 if __name__ == "__main__":
     main()
