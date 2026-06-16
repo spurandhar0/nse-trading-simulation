@@ -8,6 +8,9 @@ output/partial/, keeping only the last row per Test number.
 
 Also handles the legacy single-file case (full_sweep_partial.csv) for
 backwards compatibility.
+
+FIX: Now also strips duplicate header rows (where "Test" is the string
+"Test") that were injected by a cross-day resume bug (write_hdr logic).
 """
 import os
 import sys
@@ -22,23 +25,43 @@ if not os.path.isdir(PARTIAL_DIR):
 
 import pandas as pd
 
-# ── Compact legacy single CSV (if it exists from an old run) ──────────────────
-if os.path.exists(LEGACY_CSV):
-    before_size = os.path.getsize(LEGACY_CSV)
-    df = pd.read_csv(LEGACY_CSV)
+
+def _compact_csv(path: str) -> tuple[int, int, float, float]:
+    """
+    Deduplicate a single CSV in-place. Returns (before_rows, after_rows,
+    before_mb, after_mb). Raises on unrecoverable errors.
+    """
+    before_size = os.path.getsize(path)
+    df = pd.read_csv(path)
     before_rows = len(df)
+
+    # FIX: coerce "Test" column to numeric and drop non-numeric rows.
+    # This removes any duplicate header lines that were accidentally appended
+    # when a cross-day resume wrote write_hdr=True to an existing file.
+    df["Test"] = pd.to_numeric(df["Test"], errors="coerce")
+    df = df.dropna(subset=["Test"])
+    df["Test"] = df["Test"].astype(int)
+
     df = (
         df.drop_duplicates(subset=["Test"], keep="last")
           .sort_values("Test")
           .reset_index(drop=True)
     )
-    df.to_csv(LEGACY_CSV, index=False)
-    after_size = os.path.getsize(LEGACY_CSV)
-    print(
-        f"[legacy] Compacted full_sweep_partial.csv: "
-        f"{before_rows} -> {len(df)} rows  "
-        f"({before_size/1024/1024:.1f} MB -> {after_size/1024/1024:.1f} MB)"
-    )
+    df.to_csv(path, index=False)
+    after_size = os.path.getsize(path)
+    return before_rows, len(df), before_size / 1024 / 1024, after_size / 1024 / 1024
+
+
+# ── Compact legacy single CSV (if it exists from an old run) ──────────────────
+if os.path.exists(LEGACY_CSV):
+    try:
+        br, ar, bmb, amb = _compact_csv(LEGACY_CSV)
+        print(
+            f"[legacy] Compacted full_sweep_partial.csv: "
+            f"{br} -> {ar} rows ({bmb:.1f} MB -> {amb:.1f} MB)"
+        )
+    except Exception as e:
+        print(f"WARN: could not compact {LEGACY_CSV}: {e}")
 
 # ── Compact each chunk_*.csv file ─────────────────────────────────────────────
 chunk_files = sorted(glob.glob(os.path.join(PARTIAL_DIR, "chunk_*.csv")))
@@ -47,37 +70,28 @@ if not chunk_files:
     print("No chunk files found — nothing to compact.")
     sys.exit(0)
 
-total_before = 0
-total_after  = 0
+total_before    = 0
+total_after     = 0
 total_before_mb = 0.0
 total_after_mb  = 0.0
 
 for cf in chunk_files:
     try:
-        before_size = os.path.getsize(cf)
-        df = pd.read_csv(cf)
-        before_rows = len(df)
-        df = (
-            df.drop_duplicates(subset=["Test"], keep="last")
-              .sort_values("Test")
-              .reset_index(drop=True)
-        )
-        df.to_csv(cf, index=False)
-        after_size = os.path.getsize(cf)
-        total_before     += before_rows
-        total_after      += len(df)
-        total_before_mb  += before_size / 1024 / 1024
-        total_after_mb   += after_size  / 1024 / 1024
-        if before_rows != len(df):
+        br, ar, bmb, amb = _compact_csv(cf)
+        total_before    += br
+        total_after     += ar
+        total_before_mb += bmb
+        total_after_mb  += amb
+        if br != ar:
             print(
-                f"  {os.path.basename(cf)}: {before_rows} -> {len(df)} rows  "
-                f"({before_size/1024/1024:.1f} MB -> {after_size/1024/1024:.1f} MB)"
+                f"  {os.path.basename(cf)}: {br} -> {ar} rows "
+                f"({bmb:.1f} MB -> {amb:.1f} MB)"
             )
     except Exception as e:
         print(f"  WARN: could not compact {cf}: {e}")
 
 print(
-    f"\nCompact complete: {len(chunk_files)} chunk(s)  |  "
-    f"{total_before:,} -> {total_after:,} rows  |  "
+    f"\nCompact complete: {len(chunk_files)} chunk(s) | "
+    f"{total_before:,} -> {total_after:,} rows | "
     f"{total_before_mb:.1f} MB -> {total_after_mb:.1f} MB total"
 )
