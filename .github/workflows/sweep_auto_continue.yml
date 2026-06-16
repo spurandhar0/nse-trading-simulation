@@ -1,6 +1,20 @@
 name: Sweep Auto-Continue
 
+# PRIMARY FIX: GitHub blocks workflow_run events when the completing workflow
+# was dispatched by GITHUB_TOKEN from within another workflow.  Adding a
+# schedule guarantees the chain survives even when workflow_run goes silent.
+#
+# Behaviour:
+#   • workflow_run fires when a Monthly Parameter Sweep run completes normally.
+#   • schedule fires every 6 hours as a fallback.
+#   • Both paths check whether a sweep is already in-progress before triggering
+#     a new one, so there is never a duplicate run.
+#   • If output/partial/ has no chunk_*.csv files the sweep is either done or
+#     was never started — no re-trigger is needed.
+
 on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours — backup for broken workflow_run chain
   workflow_run:
     workflows: ["Monthly Parameter Sweep"]
     types: [completed]
@@ -21,31 +35,67 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const run = context.payload.workflow_run;
+            // ── Determine trigger source ───────────────────────────────────────
+            const isScheduled = !context.payload.workflow_run;
+            if (isScheduled) {
+              console.log('Triggered by schedule — checking sweep state…');
+            } else {
+              const run = context.payload.workflow_run;
+              const durationMin =
+                (new Date(run.updated_at) - new Date(run.created_at)) / 60000;
+              console.log(
+                `Triggering run #${run.run_number} lasted ${durationMin.toFixed(1)} min ` +
+                `(conclusion: ${run.conclusion})`
+              );
+              // CASCADE PROTECTION: skip re-trigger for very short runs (instant
+              // failures / cascades).  Only applies to workflow_run path.
+              if (durationMin < 5) {
+                console.log('Run was too short (<5 min) — instant failure or cascade. Not re-triggering.');
+                core.setOutput('should_continue', 'false');
+                return;
+              }
+            }
 
-            // CASCADE PROTECTION: If the triggering run lasted < 5 minutes,
-            // it was an instant failure / cascade — don't re-trigger endlessly.
-            const durationMin = (new Date(run.updated_at) - new Date(run.created_at)) / 60000;
-            console.log(`Triggering run #${run.run_number} lasted ${durationMin.toFixed(1)} min (conclusion: ${run.conclusion})`);
-            if (durationMin < 5) {
-              console.log('Run was too short (<5 min) — instant failure or cascade. Not re-triggering.');
+            // ── Guard: skip if a sweep is already running or queued ────────────
+            // Prevents double-starts when schedule and workflow_run both fire
+            // near-simultaneously, or when the user manually starts a run.
+            const [{ data: inProgress }, { data: queued }] = await Promise.all([
+              github.rest.actions.listWorkflowRuns({
+                owner:       context.repo.owner,
+                repo:        context.repo.repo,
+                workflow_id: 'run_simulation.yml',
+                status:      'in_progress',
+                per_page:    1,
+              }),
+              github.rest.actions.listWorkflowRuns({
+                owner:       context.repo.owner,
+                repo:        context.repo.repo,
+                workflow_id: 'run_simulation.yml',
+                status:      'queued',
+                per_page:    1,
+              }),
+            ]);
+            if (inProgress.total_count > 0 || queued.total_count > 0) {
+              console.log('Sweep is already running or queued — no duplicate trigger needed.');
               core.setOutput('should_continue', 'false');
               return;
             }
 
-            // Check if any chunk_*.csv files exist in output/partial/
-            // (chunk files = sweep is still in progress; no chunk files = complete or not started)
+            // ── Check for chunk_*.csv files in output/partial/ ─────────────────
+            // Chunk files exist  → sweep is in progress, needs to continue.
+            // No chunk files     → sweep is complete (they are deleted on finish)
+            //                      or was never started — no action needed.
             try {
               const { data: contents } = await github.rest.repos.getContent({
                 owner: context.repo.owner,
-                repo: context.repo.repo,
-                path: 'output/partial',
+                repo:  context.repo.repo,
+                path:  'output/partial',
               });
               const chunkFiles = Array.isArray(contents)
                 ? contents.filter(f => /^chunk_\d+\.csv$/.test(f.name))
                 : [];
               if (chunkFiles.length > 0) {
-                console.log(`Found ${chunkFiles.length} chunk file(s) — sweep is not complete. Triggering next run...`);
+                console.log(`Found ${chunkFiles.length} chunk file(s) — sweep is not complete. Triggering next run…`);
                 core.setOutput('should_continue', 'true');
               } else {
                 console.log('No chunk files in output/partial/ — sweep is complete or not started. No re-trigger.');
@@ -53,7 +103,7 @@ jobs:
               }
             } catch (e) {
               if (e.status === 404) {
-                console.log('output/partial/ directory not found — sweep is complete. No re-trigger needed.');
+                console.log('output/partial/ directory not found — sweep not started. No re-trigger needed.');
                 core.setOutput('should_continue', 'false');
               } else {
                 throw e;
