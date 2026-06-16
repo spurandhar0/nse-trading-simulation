@@ -1672,6 +1672,11 @@ def main():
         for cf in existing_chunks:
             try:
                 _df = pd.read_csv(cf, usecols=["Test"])
+                # FIX: coerce to numeric — drops any duplicate header rows (where
+                # "Test" is the string "Test") that may have been appended on
+                # a cross-day resume before this fix was applied.
+                _df["Test"] = pd.to_numeric(_df["Test"], errors="coerce")
+                _df = _df.dropna(subset=["Test"])
                 done_set.update(int(t) for t in _df["Test"])
             except Exception as e:
                 print(f"  WARN: could not read {cf}: {e}")
@@ -1683,15 +1688,18 @@ def main():
     os.makedirs(run_folder, exist_ok=True)
 
     # ── Determine current chunk state (which chunk to write to next) ──────────
-    # Write chunks to both partial/ (checkpoint) and runs/date/ (CSV output)
-    real_chunks = sorted(glob.glob(os.path.join(run_folder, "sweep_*.csv")))
-    if real_chunks:
-        last_chunk = real_chunks[-1]
+    # FIX: Always derive chunk state from partial/ (not run_folder) so that
+    # cross-day resumes never reset _cur_chunk_idx to 1 when chunk_000001.csv
+    # already holds 25 000 rows from a previous session.
+    # existing_chunks already excludes the legacy CSV; re-derive the pure chunk list.
+    _partial_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+    if _partial_chunks:
+        _last_partial = _partial_chunks[-1]
         _cur_chunk_idx = int(
-            os.path.basename(last_chunk).replace("sweep_", "").replace(".csv", "")
+            os.path.basename(_last_partial).replace("chunk_", "").replace(".csv", "")
         )
         try:
-            _cur_chunk_rows = max(0, sum(1 for _ in open(last_chunk)) - 1)  # minus header
+            _cur_chunk_rows = max(0, sum(1 for _ in open(_last_partial)) - 1)  # minus header
             if _cur_chunk_rows >= CHUNK_SIZE:
                 _cur_chunk_idx += 1
                 _cur_chunk_rows = 0
@@ -1718,11 +1726,15 @@ def main():
         pending_rows.clear()
         cp = _chunk_path()
         rp = _run_chunk_path()
-        write_hdr = not os.path.exists(cp) or _cur_chunk_rows == 0
+        # FIX: write header only when the file does not yet exist.
+        # The old condition (or _cur_chunk_rows == 0) incorrectly wrote a
+        # second header into an existing chunk on every cross-day resume,
+        # corrupting the CSV with a stray "Test,DAYSBACK,…" data row.
+        write_hdr = not os.path.exists(cp)
         df_batch = pd.DataFrame(batch, columns=COLUMNS_43)
         df_batch.to_csv(cp, mode="a", header=write_hdr, index=False)
         # Also write to run-date folder (CSV output)
-        run_hdr = not os.path.exists(rp) or _cur_chunk_rows == 0
+        run_hdr = not os.path.exists(rp)
         df_batch.to_csv(rp, mode="a", header=run_hdr, index=False)
         _cur_chunk_rows += len(batch)
         if _cur_chunk_rows >= CHUNK_SIZE:
@@ -1815,6 +1827,23 @@ def main():
     print(f"\n✅ All {total_expected:,} combos complete!")
     print(f"✅ CSV files : {total_csv_files} files (25K rows each)")
     print(f"✅ Run folder: {run_folder}")
+
+    # FIX: Remove partial/ chunk files on completion so that Sweep Auto-Continue
+    # (schedule-based) sees no chunk files and stops re-triggering new runs.
+    # The canonical output is already in output/runs/{date}/sweep_*.csv and
+    # the final Excel in output/full_sweep/.
+    _finished_chunks = sorted(glob.glob(os.path.join(partial_dir, "chunk_*.csv")))
+    _legacy = os.path.join(partial_dir, "full_sweep_partial.csv")
+    _to_remove = _finished_chunks + ([_legacy] if os.path.exists(_legacy) else [])
+    if _to_remove:
+        print(f"\n🧹 Cleaning up {len(_to_remove)} partial checkpoint file(s)…")
+        for _cf in _to_remove:
+            try:
+                os.remove(_cf)
+                print(f"   Removed: {os.path.basename(_cf)}")
+            except Exception as _e:
+                print(f"   WARN: could not remove {_cf}: {_e}")
+        print("✅ Partial checkpoints cleared — Sweep Auto-Continue will not re-trigger.")
 
 
 if __name__ == "__main__":
