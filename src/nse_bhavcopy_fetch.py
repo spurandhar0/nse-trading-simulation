@@ -1,99 +1,117 @@
 """
-NSE Bhavcopy Fetcher -> GitHub Storage
-=======================================
-Downloads the NSE EQ bhavcopy for today and saves it to:
-  bhav_data/sec_bhavdata_full_DDMMYYYY.csv  (committed by workflow)
-
-- Saves to bhav_data/ ROOT (same folder as all historical files)
-- Skips download if a file for today already exists (no duplicates)
-- Runs via GitHub Actions every weekday at 6:15 PM IST
+NSE Bhavcopy Fetcher
+=====================
+Downloads today's NSE EQ bhavcopy and saves to bhav_data/
+Outputs GitHub Actions step output: new_file=true/false
 """
 
-import os, glob, requests
-from datetime import datetime, timedelta, timezone
+import argparse
+import csv
+import glob
+import io
+import os
+from datetime import date, datetime, timedelta, timezone
+
+import requests
 
 IST     = timezone(timedelta(hours=5, minutes=30))
 NOW_IST = datetime.now(tz=IST)
-
 BHAV_ROOT = "bhav_data"
 
-# ─── MAIN FETCH ───────────────────────────────────────────────────────────────
+# NSE capital market circular NSE/CMTR/71775.
+NSE_HOLIDAYS_2026 = {
+    date(2026, 1, 26), date(2026, 3, 3), date(2026, 3, 26),
+    date(2026, 3, 31), date(2026, 4, 3), date(2026, 4, 14),
+    date(2026, 5, 1), date(2026, 5, 28), date(2026, 6, 26),
+    date(2026, 9, 14), date(2026, 10, 2), date(2026, 10, 20),
+    date(2026, 11, 10), date(2026, 11, 24), date(2026, 12, 25),
+}
+NSE_MUHURAT_2026 = date(2026, 11, 8)
 
-def fetch_bhav():
-    dd   = NOW_IST.strftime("%d")
-    mm   = NOW_IST.strftime("%m")
-    yyyy = NOW_IST.strftime("%Y")
-    mon3 = NOW_IST.strftime("%b")   # e.g. Apr
+
+def set_gha_output(key, value):
+    gha_output = os.environ.get("GITHUB_OUTPUT", "")
+    if gha_output:
+        with open(gha_output, "a") as f:
+            f.write(f"{key}={value}\n")
+
+
+def fetch_bhav(session_date, *, allow_missing=False):
+    dd, mm, yyyy, mon3 = session_date.strftime("%d %m %Y %b").split()
 
     fname    = f"sec_bhavdata_full_{dd}{mm}{yyyy}.csv"
     savepath = os.path.join(BHAV_ROOT, fname)
 
-    # ── DUPLICATE CHECK ─────────────────────────────────────────────────────
-    # Search bhav_data/ (root + any subfolders) for a file with today's date
     date_pattern = f"*_{dd}{mm}{yyyy}.csv"
-    existing = glob.glob(os.path.join(BHAV_ROOT, "**", date_pattern), recursive=True) \
-             + glob.glob(os.path.join(BHAV_ROOT, date_pattern))
-    existing = list(set(existing))  # deduplicate paths
+    existing = (
+        glob.glob(os.path.join(BHAV_ROOT, "**", date_pattern), recursive=True)
+        + glob.glob(os.path.join(BHAV_ROOT, date_pattern))
+    )
+    existing = list(set(existing))
 
     if existing:
-        print(f"⚠️  File for {dd}-{mon3}-{yyyy} already exists: {existing[0]}")
-        print(f"⏭️  Skipping download — no duplicate will be created.")
-        return
-    # ────────────────────────────────────────────────────────────────────────
+        print(f"\u26a0\ufe0f  File for {dd}-{mon3}-{yyyy} already exists: {existing[0]}")
+        print("\u23ed\ufe0f  Skipping download.")
+        set_gha_output("new_file", "false")
+        return True
 
     url = (
         f"https://nsearchives.nseindia.com/products/content/"
         f"sec_bhavdata_full_{dd}{mm}{yyyy}.csv"
     )
-
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
                       "Chrome/124.0.0.0 Safari/537.36",
-        "Referer":    "https://www.nseindia.com",
-        "Accept":     "text/html,application/xhtml+xml,*/*",
+        "Referer": "https://www.nseindia.com",
+        "Accept": "text/html,application/xhtml+xml,*/*",
         "Accept-Language": "en-US,en;q=0.9",
     }
-
-    # NSE requires a session cookie — visit homepage first
-    session = requests.Session()
-    print("Getting NSE session cookies...")
-    session.get("https://www.nseindia.com", headers=headers, timeout=20)
-
     print(f"Downloading bhav: {url}")
-    resp = session.get(url, headers=headers, timeout=60)
+    resp = requests.get(url, headers=headers, timeout=60)
+    if allow_missing and resp.status_code == 404:
+        print(f"No archive file for {session_date}; skipping.")
+        return False
+    resp.raise_for_status()
 
-    if resp.status_code != 200:
-        msg = (
-            f"❌ NSE Bhavcopy FAILED\n"
-            f"Date      : {dd}-{mon3}-{yyyy}\n"
-            f"HTTP Status: {resp.status_code}\n"
-            f"Reason    : NSE may not have published today's bhavcopy yet.\n"
-            f"Note      : File is usually available after 6:30 PM IST."
-        )
-        print(msg)
-        return
+    reader = csv.DictReader(io.StringIO(resp.content.decode("utf-8-sig")))
+    reader.fieldnames = [name.strip().upper() for name in (reader.fieldnames or [])]
+    expected_date = session_date.strftime("%d-%b-%Y").upper()
+    if not {"SYMBOL", "SERIES", "DATE1", "OPEN_PRICE", "HIGH_PRICE",
+            "LOW_PRICE", "CLOSE_PRICE"}.issubset(reader.fieldnames):
+        raise ValueError(f"Unexpected bhavcopy columns for {session_date}")
+    if not any(
+        (row["SERIES"] or "").strip().upper() == "EQ"
+        and (row["DATE1"] or "").strip().upper() == expected_date
+        for row in reader
+    ):
+        raise ValueError(f"Bhavcopy contains no EQ rows for {session_date}")
 
-    # Ensure bhav_data/ root exists
     os.makedirs(BHAV_ROOT, exist_ok=True)
-
-    # Save directly to bhav_data/ root — same as all historical files
     with open(savepath, "wb") as f:
         f.write(resp.content)
 
     size_kb = os.path.getsize(savepath) / 1024
-
     with open(savepath, "r") as f:
-        row_count = sum(1 for _ in f) - 1  # minus header
+        row_count = sum(1 for _ in f) - 1
 
-    print(f"✅ Saved   : {savepath} ({size_kb:.1f} KB)")
-    print(f"✅ Date    : {dd}-{mon3}-{yyyy}")
-    print(f"✅ Rows    : {row_count:,}")
-    print(f"✅ Done. Ready for simulation.")
+    print(f"\u2705 Saved   : {savepath} ({size_kb:.1f} KB)")
+    print(f"\u2705 Date    : {dd}-{mon3}-{yyyy}")
+    print(f"\u2705 Rows    : {row_count:,}")
+    set_gha_output("new_file", "true")
+    return True
 
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print(f"NSE Bhavcopy Fetch | {NOW_IST.strftime('%d-%b-%Y %H:%M IST')}")
-    print("=" * 50)
-    fetch_bhav()
+    parser = argparse.ArgumentParser(description="Download NSE equity bhavcopies")
+    parser.add_argument("--session-date", type=date.fromisoformat, default=NOW_IST.date())
+    parser.add_argument("--from-date", type=date.fromisoformat)
+    args = parser.parse_args()
+    day = args.from_date or args.session_date
+    if day > args.session_date:
+        parser.error("--from-date must be on or before --session-date")
+    while day < args.session_date:
+        if day == NSE_MUHURAT_2026 or (day.weekday() < 5 and day not in NSE_HOLIDAYS_2026):
+            fetch_bhav(day, allow_missing=True)
+        day += timedelta(days=1)
+    fetch_bhav(args.session_date)
