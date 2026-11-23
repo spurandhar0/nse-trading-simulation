@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "30 11 * * 1-5"   # 5:00 PM IST (11:30 UTC) Mon-Fri
   workflow_dispatch:
+    inputs:
+      session_date:
+        description: 'Last trading session for recovery (YYYY-MM-DD)'
+        type: string
+        required: false
+      from_date:
+        description: 'First date for historical recovery (YYYY-MM-DD)'
+        type: string
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Fix: Node.js 24 upgrade (deadline Jun 2 2026)
@@ -30,10 +39,20 @@ jobs:
         run: pip install requests
 
       - name: Fetch latest NSE bhavcopy
-        run: python src/nse_bhavcopy_fetch.py
+        env:
+          SESSION_DATE: ${{ inputs.session_date }}
+          FROM_DATE: ${{ inputs.from_date }}
+        run: |
+          args=()
+          if [ -n "$SESSION_DATE" ]; then
+            args+=(--session-date "$SESSION_DATE")
+          fi
+          if [ -n "$FROM_DATE" ]; then
+            args+=(--from-date "$FROM_DATE")
+          fi
+          python src/nse_bhavcopy_fetch.py "${args[@]}"
 
       - name: Commit bhav data to repo
-        if: always()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
